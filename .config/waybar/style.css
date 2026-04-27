@@ -1,0 +1,118 @@
+* {
+  border: none;
+  border-radius: 0;
+  font-family: "JetBrainsMono Nerd Font", monospace;
+  font-size: 12px;
+  min-height: 0;
+  transition: all 0.2s ease;
+}
+
+window#waybar {
+  background: transparent;
+}
+
+/* ── shared pill ── */
+.modules-left,
+.modules-center,
+.modules-right {
+  background: rgba(8, 10, 16, 0.78);
+  border: 0.5px solid rgba(255, 255, 255, 0.07);
+  border-radius: 14px;
+  padding: 0 6px;
+}
+
+/* ── workspaces ── */
+#workspaces {
+  padding: 4px 2px;
+}
+
+#workspaces button {
+  color: rgba(255, 255, 255, 0.25);
+  background: transparent;
+  padding: 2px 10px;
+  border-radius: 10px;
+  min-width: 0;
+}
+
+#workspaces button.active {
+  color: #e9d5ff;
+  background: rgba(124, 58, 237, 0.75);
+}
+
+#workspaces button.occupied {
+  color: rgba(255, 255, 255, 0.55);
+}
+
+#workspaces button:hover {
+  background: rgba(255, 255, 255, 0.07);
+  color: rgba(255, 255, 255, 0.8);
+}
+
+/* ── clock ── */
+#clock {
+  color: rgba(255, 255, 255, 0.90);
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  padding: 0 10px;
+}
+
+/* ── right modules shared ── */
+#pulseaudio,
+#backlight,
+#network,
+#custom-user,
+#tray {
+  color: rgba(255, 255, 255, 0.60);
+  padding: 0 10px;
+}
+
+/* ── separators between right modules ── */
+#pulseaudio,
+#backlight,
+#network {
+  border-right: 0.5px solid rgba(255, 255, 255, 0.07);
+}
+
+/* ── accent colors ── */
+#backlight {
+  color: #fde68a;
+}
+
+#pulseaudio {
+  color: #a5f3fc;
+}
+
+#pulseaudio.muted {
+  color: rgba(255, 255, 255, 0.2);
+}
+
+#network {
+  color: #86efac;
+}
+
+#network.disconnected {
+  color: rgba(255, 255, 255, 0.2);
+}
+
+#custom-user {
+  color: #c4b5fd;
+  font-weight: 500;
+}
+
+#tray {
+  padding: 0 8px;
+}
+
+#tray > .passive {
+  -gtk-icon-effect: dim;
+}
+
+/* ── tooltips ── */
+tooltip {
+  background: rgba(8, 10, 16, 0.92);
+  border: 0.5px solid rgba(255, 255, 255, 0.09);
+  border-radius: 10px;
+  padding: 6px 10px;
+  color: rgba(255, 255, 255, 0.80);
+}
+
