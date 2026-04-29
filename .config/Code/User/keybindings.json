@@ -1,0 +1,147 @@
+[
+    {
+        "key": "alt+c",
+        "command": "editor.action.clipboardCopyAction",
+        "when": "textInputFocus"
+    },
+    {
+        "key": "alt+v",
+        "command": "editor.action.clipboardPasteAction",
+        "when": "textInputFocus"
+    },
+    {
+        "key": "alt+c",
+        "command": "workbench.action.terminal.copySelection",
+        "when": "terminalFocus && terminalHasSelection"
+    },
+    {
+        "key": "alt+v",
+        "command": "workbench.action.terminal.paste",
+        "when": "terminalFocus"
+    },
+    {
+        "key": "alt+p",
+        "command": "workbench.action.quickOpen"
+    },
+    {
+        "key": "alt+up",
+        "command": "cursorTop",
+        "when": "textInputFocus"
+    },
+    {
+        "key": "alt+down",
+        "command": "cursorBottom",
+        "when": "textInputFocus"
+    },
+    {
+        "key": "alt+left",
+        "command": "cursorHome",
+        "when": "textInputFocus"
+    },
+    {
+        "key": "alt+right",
+        "command": "cursorEnd",
+        "when": "textInputFocus"
+    },
+    {
+        "key": "alt+f",
+        "command": "actions.find",
+        "when": "editorFocus"
+    },
+    {
+    "key": "alt+shift+up",
+    "command": "cursorTopSelect",
+    "when": "textInputFocus"
+},
+{
+    "key": "alt+shift+down",
+    "command": "cursorBottomSelect",
+    "when": "textInputFocus"
+},
+{
+    "key": "alt+shift+left",
+    "command": "cursorHomeSelect",
+    "when": "textInputFocus"
+},
+{
+    "key": "alt+shift+right",
+    "command": "cursorEndSelect",
+    "when": "textInputFocus"
+},
+{
+    "key": "alt+d",
+    "command": "editor.action.addSelectionToNextFindMatch",
+    "when": "editorFocus"
+},
+{
+    "key": "win+right",
+    "command": "cursorWordEndRight",
+    "when": "textInputFocus"
+},
+{
+    "key": "win+left",
+    "command": "cursorWordStartLeft",
+    "when": "textInputFocus"
+},
+// Highlight word by word
+{
+    "key": "win+shift+right",
+    "command": "cursorWordEndRightSelect",
+    "when": "textInputFocus"
+},
+{
+    "key": "win+shift+left",
+    "command": "cursorWordStartLeftSelect",
+    "when": "textInputFocus"
+},
+{
+    "key": "alt+shift+p",
+    "command": "workbench.action.showCommands"
+},
+    {
+        "key": "alt+z",
+        "command": "undo",
+        "when": "textInputFocus"
+    },
+    {
+        "key": "alt+shift+f",
+        "command": "workbench.action.findInFiles"
+    },
+    {
+        "key": "alt+shift+h",
+        "command": "editor.action.startFindReplaceAction",
+        "when": "editorFocus"
+    },
+    {
+        "key": "win+shift+h",
+        "command": "editor.action.startFindReplaceAction",
+        "when": "editorFocus"
+    },
+    {
+        "key": "alt+a",
+        "command": "editor.action.selectAll",
+        "when": "editorFocus"
+    },
+    {
+        "key": "alt+t",
+        "command": "workbench.action.terminal.toggleTerminal"
+    },
+    {
+        "key": "alt+s",
+        "command": "workbench.action.files.save"
+    },
+    {
+        "key": "alt+backspace",
+        "command": "deleteFile",
+        "when": "filesExplorerFocus && !inputFocus"
+    },
+    {
+        "key": "alt+w",
+        "command": "workbench.action.closeActiveEditor"
+    },
+    {
+    "key": "alt+/",
+    "command": "editor.action.commentLine",
+    "when": "editorFocus && !editorReadonly"
+    }
+]
