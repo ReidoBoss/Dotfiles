@@ -35,3 +35,16 @@ require "autocmds"
 vim.schedule(function()
   require "mappings"
 end)
+
+vim.api.nvim_create_autocmd("BufWritePre", {
+  pattern = { "*.rs", "*.toml", "*.lua" },
+  callback = function()
+    -- 1. Format the file
+    vim.lsp.buf.format({ async = false })
+
+    -- 2. Ensure exactly one blank line at the end
+    -- This removes trailing whitespace/newlines and adds one clean empty line
+    vim.cmd([[silent! %s/\n\+\%$//e]])
+    vim.api.nvim_buf_set_lines(0, -1, -1, false, { "" })
+  end,
+})
