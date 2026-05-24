@@ -1,0 +1,9 @@
+{"timestamp":7396898,"category":"bounce.tracking.protection","name":"purge_action","extra":{"bounce_time":"1779495947","site_host":"shopee.com","glean_timestamp":"1779502932364","success":"true","is_dry_run":"true"},"execution_counter":37}
+{"timestamp":26183,"category":"glean","name":"restarted","extra":{"glean_timestamp":"1779507305120","glean.startup.date":"2026-05-23T11:35+08:00"},"execution_counter":38}
+{"timestamp":46999,"category":"glean","name":"restarted","extra":{"glean.startup.date":"2026-05-23T11:35+08:00","glean_timestamp":"1779507325936"},"execution_counter":38}
+{"timestamp":62774,"category":"glean","name":"restarted","extra":{"glean.startup.date":"2026-05-23T16:03+08:00","glean_timestamp":"1779523438789"},"execution_counter":39}
+{"timestamp":2545331,"category":"glean","name":"restarted","extra":{"glean_timestamp":"1779525921776","glean.startup.date":"2026-05-23T16:45+08:00"},"execution_counter":40}
+{"timestamp":65748,"category":"glean","name":"restarted","extra":{"glean_timestamp":"1779540015708","glean.startup.date":"2026-05-23T20:40+08:00"},"execution_counter":41}
+{"timestamp":3663409,"category":"bounce.tracking.protection","name":"purge_action","extra":{"glean_timestamp":"1779543613375","site_host":"shopee.com","is_dry_run":"true","bounce_time":"1779503411","success":"true"},"execution_counter":41}
+{"timestamp":52118,"category":"glean","name":"restarted","extra":{"glean.startup.date":"2026-05-24T15:13+08:00","glean_timestamp":"1779606815750"},"execution_counter":42}
+{"timestamp":2658282,"category":"glean","name":"restarted","extra":{"glean.startup.date":"2026-05-24T15:57+08:00","glean_timestamp":"1779609421914"},"execution_counter":43}
