@@ -8,8 +8,14 @@ cd win32yank
 chmod +x win32yank.exe
 mv win32yank.exe /ucrt64/bin/
 echo "alias win32yank='/ucrt64/bin/win32yank.exe'" >> ~/.zshrc && source ~/.zshrc
+pacman -S git make tar gzip ripgrep fd
 ```
-
+in windows terminal
+```
+git clone https://github.com/NvChad/starter $ENV:USERPROFILE\AppData\Local\nvim; nvim
+```
+to install c and cpp:
+https://gist.github.com/semick-dev/a6096358097516567e31f01378904ab3
 ## Set `zsh` as your default MSYS2 shell
 
 1. Locate MSYS2 installation folder in windows. In my case, it's in `C:\msys64`.
