@@ -12,6 +12,7 @@ wget -O msys2.tar.zst https://github.com/msys2/msys2-installer/releases/download
 ```bash
 pacman -Syu mingw-w64-ucrt-x86_64-neovim
 echo "alias nvim='/ucrt64/bin/nvim.exe'" >> ~/.zshrc && source ~/.zshrc
+echo "export PROMPT='%F{cyan}%n%f %F{magenta}➜%f %F{yellow}%~%f $ '" >> ~/.zshrc
 pacman -Syu man
 pacman -Syu openssh rsync make
 pacman -Syu zip unzip
