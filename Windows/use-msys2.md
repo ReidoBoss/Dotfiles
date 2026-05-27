@@ -13,6 +13,7 @@ pacman -S git make tar gzip ripgrep fd
 in windows terminal
 ```
 git clone https://github.com/NvChad/starter $ENV:USERPROFILE\AppData\Local\nvim; nvim
+winget install BurntSushi.ripgrep
 ```
 to install c and cpp:
 https://gist.github.com/semick-dev/a6096358097516567e31f01378904ab3
