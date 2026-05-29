@@ -1,51 +1,48 @@
 gpick() {
   if [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
     cat <<'EOF'
-gpick - grep files and choose one with a small Bash TUI preview
+gpick - live grep picker with preview using pure old Bash
 
 Usage:
-  gpick "search text" "extensions" "directory"
+  gpick [initial search] [extensions] [directory]
 
 Examples:
-  gpick "defineProps" "vue,ts" .
-  gpick "case class" "scala" app
-  gpick "useState" "tsx,ts" src
-  gpick "TODO"
-
-Arguments:
-  search text   Text you want to grep
-  extensions    Comma-separated file extensions, example: vue,ts,scala
-  directory     Directory to search in. Defaults to current directory
+  gpick
+  gpick defineProps vue,ts src
+  gpick "case class" scala app
+  gpick "TODO" "" .
 
 Controls:
-  j / Down Arrow   Move down
-  k / Up Arrow     Move up
-  Enter            Open selected file
-  q                Quit
+  Type text      Grep files live
+  Backspace      Delete character
+  Ctrl+u         Clear search
+  Down / Ctrl+n  Move down
+  Up / Ctrl+p    Move up
+  Enter          Open selected file at first match
+  Esc            Quit
 
 Notes:
-  If extensions is empty, gpick searches all files.
-  It ignores .git, node_modules, dist, build, and target.
+  Pure Bash version. No fzf, no plugins, no mapfile.
+  Ignores .git, node_modules, dist, build, and target.
 EOF
     return
   fi
 
-  local search="$1"
+  local query="$1"
   local exts="$2"
   local dir="${3:-.}"
-  local tmp file total line editor
 
-  [ -z "$search" ] && read -p "Search text: " search
-  [ -z "$exts" ] && read -p "Extensions ex: ts,vue,scala. Empty = all: " exts
+  local all="/tmp/gpick-all-$$"
+  local filtered="/tmp/gpick-filtered-$$"
 
-  tmp="/tmp/gpick-files-$$"
-  > "$tmp"
+  > "$all"
+  > "$filtered"
 
   if [ -z "$exts" ]; then
     find "$dir" \
       -type d \( -name .git -o -name node_modules -o -name dist -o -name build -o -name target \) -prune -o \
-      -type f -exec grep -Il -- "$search" {} \; \
-      > "$tmp" 2>/dev/null
+      -type f -print 2>/dev/null \
+      > "$all"
   else
     local old_ifs ext
     old_ifs="$IFS"
@@ -57,24 +54,54 @@ EOF
 
       find "$dir" \
         -type d \( -name .git -o -name node_modules -o -name dist -o -name build -o -name target \) -prune -o \
-        -type f -name "*.$ext" -exec grep -Il -- "$search" {} \; \
-        >> "$tmp" 2>/dev/null
+        -type f -name "*.$ext" -print 2>/dev/null \
+        >> "$all"
     done
 
     IFS="$old_ifs"
-    sort -u "$tmp" -o "$tmp"
+    sort -u "$all" -o "$all"
   fi
 
-  if [ ! -s "$tmp" ]; then
-    echo "No matching files found."
-    rm -f "$tmp"
+  if [ ! -s "$all" ]; then
+    echo "No files found."
+    rm -f "$all" "$filtered"
     return
   fi
 
-  total=$(wc -l < "$tmp" | tr -d ' ')
-
   local selected_num=1
   local offset=1
+  local total=0
+
+  update_filter() {
+    > "$filtered"
+
+    if [ -z "$query" ]; then
+      total=0
+      selected_num=1
+      offset=1
+      return
+    fi
+
+    while IFS= read -r file; do
+      grep -Il -- "$query" "$file" 2>/dev/null
+    done < "$all" > "$filtered"
+
+    total=$(wc -l < "$filtered" | tr -d ' ')
+
+    if [ "$total" -eq 0 ]; then
+      selected_num=1
+      offset=1
+      return
+    fi
+
+    if [ "$selected_num" -gt "$total" ]; then
+      selected_num="$total"
+    fi
+
+    if [ "$selected_num" -lt 1 ]; then
+      selected_num=1
+    fi
+  }
 
   draw_gpick() {
     local rows list_height preview_height end i current_file preview_file
@@ -100,13 +127,23 @@ EOF
 
     clear
 
-    printf "\033[1;36mgpick TUI\033[0m  search: \033[1;33m%s\033[0m  files: %s\n" "$search" "$total"
-    printf "\033[90mj/k or arrows = move | Enter = open | q = quit | gpick -h = help\033[0m\n\n"
+    printf "\033[1;36mgpick live\033[0m  grep: \033[1;33m%s\033[0m  matches: %s\n" "$query" "$total"
+    printf "\033[90mtype = grep | arrows/Ctrl+n/Ctrl+p = move | Ctrl+u = clear | Enter = open | Esc = quit\033[0m\n\n"
+
+    if [ -z "$query" ]; then
+      echo "Start typing to grep files..."
+      return
+    fi
+
+    if [ "$total" -eq 0 ]; then
+      echo "No matching files."
+      return
+    fi
 
     i="$offset"
 
     while [ "$i" -le "$end" ]; do
-      current_file=$(sed -n "${i}p" "$tmp")
+      current_file=$(sed -n "${i}p" "$filtered")
 
       if [ "$i" -eq "$selected_num" ]; then
         printf "\033[7m%3s) %s\033[0m\n" "$i" "$current_file"
@@ -117,40 +154,37 @@ EOF
       i=$((i + 1))
     done
 
-    preview_file=$(sed -n "${selected_num}p" "$tmp")
+    preview_file=$(sed -n "${selected_num}p" "$filtered")
 
     printf "\n\033[1;36mPreview:\033[0m \033[1;32m%s\033[0m\n" "$preview_file"
     printf "\033[90m────────────────────────────────────────\033[0m\n"
 
-    grep -n -C 3 -- "$search" "$preview_file" 2>/dev/null | head -n "$preview_height"
+    grep -n -C 3 --color=always -- "$query" "$preview_file" 2>/dev/null |
+      head -n "$preview_height"
   }
+
+  update_filter
 
   while true; do
     draw_gpick
 
-    local key rest
+    local key rest file editor line
+
     IFS= read -rsn1 key
 
     case "$key" in
-      q|Q)
-        rm -f "$tmp"
-        return
-        ;;
-
-      j)
-        [ "$selected_num" -lt "$total" ] && selected_num=$((selected_num + 1))
-        ;;
-
-      k)
-        [ "$selected_num" -gt 1 ] && selected_num=$((selected_num - 1))
-        ;;
-
       "")
-        file=$(sed -n "${selected_num}p" "$tmp")
-        rm -f "$tmp"
+        if [ "$total" -eq 0 ]; then
+          continue
+        fi
 
-        line=$(grep -n -m 1 -- "$search" "$file" 2>/dev/null | cut -d: -f1)
+        file=$(sed -n "${selected_num}p" "$filtered")
+        line=$(grep -n -m 1 -- "$query" "$file" 2>/dev/null | cut -d: -f1)
+
+        rm -f "$all" "$filtered"
+
         editor="${EDITOR:-vim}"
+        clear
 
         if echo "$editor" | grep -q "vim" && [ -n "$line" ]; then
           "$editor" "+$line" "$file"
@@ -161,8 +195,30 @@ EOF
         return
         ;;
 
+      $'\177'|$'\b')
+        query="${query%?}"
+        selected_num=1
+        offset=1
+        update_filter
+        ;;
+
+      $'\025')
+        query=""
+        selected_num=1
+        offset=1
+        update_filter
+        ;;
+
+      $'\016')
+        [ "$selected_num" -lt "$total" ] && selected_num=$((selected_num + 1))
+        ;;
+
+      $'\020')
+        [ "$selected_num" -gt 1 ] && selected_num=$((selected_num - 1))
+        ;;
+
       $'\033')
-        IFS= read -rsn2 rest
+        IFS= read -rsn2 -t 0.05 rest
 
         case "$rest" in
           "[A")
@@ -171,7 +227,19 @@ EOF
           "[B")
             [ "$selected_num" -lt "$total" ] && selected_num=$((selected_num + 1))
             ;;
+          *)
+            rm -f "$all" "$filtered"
+            clear
+            return
+            ;;
         esac
+        ;;
+
+      *)
+        query="${query}${key}"
+        selected_num=1
+        offset=1
+        update_filter
         ;;
     esac
   done
