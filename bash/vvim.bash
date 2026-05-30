@@ -1,214 +1,29 @@
-vtodo() {
-  tmp="/tmp/vtodo-$$"
-
-  grep -RIn \
-    --exclude-dir=.git \
-    --exclude-dir=node_modules \
-    --exclude-dir=dist \
-    --exclude-dir=build \
-    --exclude-dir=target \
-    -E "TODO|FIXME|HACK|NOTE|BUG" . > "$tmp" 2>/dev/null
-
-  if [ ! -s "$tmp" ]; then
-    echo "No TODO/FIXME/HACK/NOTE/BUG found."
-    rm -f "$tmp"
-    read -p "Press Enter..."
-    return
-  fi
-
-  selected=1
-  offset=1
-  total=$(wc -l < "$tmp" | tr -d ' ')
-
-  while true; do
-    rows=$(tput lines 2>/dev/null || echo 24)
-    list_height=$((rows - 6))
-    [ "$list_height" -lt 5 ] && list_height=5
-
-    [ "$selected" -lt "$offset" ] && offset="$selected"
-    [ "$selected" -ge $((offset + list_height)) ] && offset=$((selected - list_height + 1))
-
-    end=$((offset + list_height - 1))
-    [ "$end" -gt "$total" ] && end="$total"
-
-    clear
-    printf "\033[1;36mvtodo\033[0m  matches: %s\n" "$total"
-    printf "\033[90mj/k or arrows = move | Enter = open | q = quit\033[0m\n\n"
-
-    i="$offset"
-
-    while [ "$i" -le "$end" ]; do
-      line=$(sed -n "${i}p" "$tmp")
-
-      if [ "$i" -eq "$selected" ]; then
-        printf "\033[7m%3s) %s\033[0m\n" "$i" "$line"
-      else
-        printf "\033[1;32m%3s)\033[0m %s\n" "$i" "$line"
-      fi
-
-      i=$((i + 1))
-    done
-
-    IFS= read -rsn1 key
-
-    case "$key" in
-      q|Q)
-        rm -f "$tmp"
-        return
-        ;;
-
-      j)
-        [ "$selected" -lt "$total" ] && selected=$((selected + 1))
-        ;;
-
-      k)
-        [ "$selected" -gt 1 ] && selected=$((selected - 1))
-        ;;
-
-      "")
-        match=$(sed -n "${selected}p" "$tmp")
-        file=$(echo "$match" | cut -d: -f1)
-        line_no=$(echo "$match" | cut -d: -f2)
-
-        rm -f "$tmp"
-        vim "+$line_no" "$file"
-        return
-        ;;
-
-      $'\033')
-        IFS= read -rsn2 rest
-
-        case "$rest" in
-          "[A")
-            [ "$selected" -gt 1 ] && selected=$((selected - 1))
-            ;;
-          "[B")
-            [ "$selected" -lt "$total" ] && selected=$((selected + 1))
-            ;;
-        esac
-        ;;
-    esac
-  done
-}
-
-vchanged() {
-  tmp="/tmp/vchanged-$$"
-
-  git status --short 2>/dev/null | awk '{print $2}' > "$tmp"
-
-  if [ ! -s "$tmp" ]; then
-    echo "No changed files."
-    rm -f "$tmp"
-    read -p "Press Enter..."
-    return
-  fi
-
-  selected=1
-  offset=1
-  total=$(wc -l < "$tmp" | tr -d ' ')
-
-  while true; do
-    rows=$(tput lines 2>/dev/null || echo 24)
-
-    list_height=$((rows / 2 - 4))
-    [ "$list_height" -lt 5 ] && list_height=5
-
-    preview_height=$((rows - list_height - 8))
-    [ "$preview_height" -lt 5 ] && preview_height=5
-
-    [ "$selected" -lt "$offset" ] && offset="$selected"
-    [ "$selected" -ge $((offset + list_height)) ] && offset=$((selected - list_height + 1))
-
-    end=$((offset + list_height - 1))
-    [ "$end" -gt "$total" ] && end="$total"
-
-    clear
-    printf "\033[1;36mvchanged\033[0m  changed files: %s\n" "$total"
-    printf "\033[90mj/k or arrows = move | Enter = open | q = quit\033[0m\n\n"
-
-    i="$offset"
-
-    while [ "$i" -le "$end" ]; do
-      file=$(sed -n "${i}p" "$tmp")
-
-      if [ "$i" -eq "$selected" ]; then
-        printf "\033[7m%3s) %s\033[0m\n" "$i" "$file"
-      else
-        printf "\033[1;32m%3s)\033[0m %s\n" "$i" "$file"
-      fi
-
-      i=$((i + 1))
-    done
-
-    file=$(sed -n "${selected}p" "$tmp")
-
-    printf "\n\033[1;36mDiff preview:\033[0m \033[1;32m%s\033[0m\n" "$file"
-    printf "\033[90m────────────────────────────────────────\033[0m\n"
-
-    git diff -- "$file" 2>/dev/null | head -n "$preview_height"
-
-    IFS= read -rsn1 key
-
-    case "$key" in
-      q|Q)
-        rm -f "$tmp"
-        return
-        ;;
-
-      j)
-        [ "$selected" -lt "$total" ] && selected=$((selected + 1))
-        ;;
-
-      k)
-        [ "$selected" -gt 1 ] && selected=$((selected - 1))
-        ;;
-
-      "")
-        file=$(sed -n "${selected}p" "$tmp")
-        rm -f "$tmp"
-        vim "$file"
-        return
-        ;;
-
-      $'\033')
-        IFS= read -rsn2 rest
-
-        case "$rest" in
-          "[A")
-            [ "$selected" -gt 1 ] && selected=$((selected - 1))
-            ;;
-          "[B")
-            [ "$selected" -lt "$total" ] && selected=$((selected + 1))
-            ;;
-        esac
-        ;;
-    esac
-  done
-}
 vvim() {
   if [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
     cat <<'EOF'
-vvim - fake Neovim dashboard for plain Vim
+vvim - fake Neovim/NvChad-like explorer for plain Vim
 
 Usage:
+  vvim [directory]
+
+Examples:
   vvim
+  vvim src
+  vvim ~/work/project
 
 Controls:
-  j / Down Arrow   Move down
-  k / Up Arrow     Move up
-  Enter            Run selected action
-  f                Find files
-  g                Grep project
-  t                TODO/FIXME picker
-  c                Changed git files
-  o                Open file by path
-  l                Open file:line
-  n                New file
-  e                Vim file explorer
-  s                Git status
-  ? / h            Toggle help
-  r                Redraw
-  q                Quit
+  j / Down Arrow     Move down
+  k / Up Arrow       Move up
+  Enter / l / Right  Enter directory or open file
+  h / Left           Go to parent directory
+  f                  Find files using vfind
+  g                  Grep project using gpick
+  .                  Toggle hidden files
+  r                  Refresh
+  o                  Open file by path
+  n                  New file
+  s                  Git status
+  q / Esc            Quit
 
 Notes:
   Pure Bash + Vim.
@@ -217,347 +32,390 @@ EOF
     return
   fi
 
+  local cwd
+  cwd=$(cd "${1:-.}" 2>/dev/null && pwd -P)
+
+  if [ -z "$cwd" ]; then
+    echo "Directory not found: ${1:-.}"
+    return
+  fi
+
+  local entries="/tmp/vvim-entries-$$"
+  local dirs="/tmp/vvim-dirs-$$"
+  local files="/tmp/vvim-files-$$"
+  local preview="/tmp/vvim-preview-$$"
   local selected=1
-  local total=10
-  local show_help=0
+  local offset=1
+  local show_hidden=0
 
-  vvim_label() {
-    case "$1" in
-      1) echo "Find files" ;;
-      2) echo "Grep project" ;;
-      3) echo "TODO / FIXME / HACK / NOTE" ;;
-      4) echo "Changed Git files" ;;
-      5) echo "Open file by path" ;;
-      6) echo "Open file:line" ;;
-      7) echo "New file" ;;
-      8) echo "Vim file explorer" ;;
-      9) echo "Git status" ;;
-      10) echo "Quit" ;;
-    esac
+  cleanup_vvim() {
+    rm -f "$entries" "$dirs" "$files" "$preview"
   }
 
-  vvim_key() {
-    case "$1" in
-      1) echo "f" ;;
-      2) echo "g" ;;
-      3) echo "t" ;;
-      4) echo "c" ;;
-      5) echo "o" ;;
-      6) echo "l" ;;
-      7) echo "n" ;;
-      8) echo "e" ;;
-      9) echo "s" ;;
-      10) echo "q" ;;
-    esac
+  build_entries() {
+    local p
+
+    > "$entries"
+    > "$dirs"
+    > "$files"
+
+    if [ "$cwd" != "/" ]; then
+      printf "%s\n" "$cwd/.." >> "$entries"
+    fi
+
+    for p in "$cwd"/*; do
+      [ -e "$p" ] || [ -L "$p" ] || continue
+
+      if [ -d "$p" ]; then
+        printf "%s\n" "$p" >> "$dirs"
+      elif [ -f "$p" ]; then
+        printf "%s\n" "$p" >> "$files"
+      fi
+    done
+
+    if [ "$show_hidden" -eq 1 ]; then
+      for p in "$cwd"/.[!.]* "$cwd"/..?*; do
+        [ -e "$p" ] || [ -L "$p" ] || continue
+
+        if [ -d "$p" ]; then
+          printf "%s\n" "$p" >> "$dirs"
+        elif [ -f "$p" ]; then
+          printf "%s\n" "$p" >> "$files"
+        fi
+      done
+    fi
+
+    sort -u "$dirs" >> "$entries"
+    sort -u "$files" >> "$entries"
   }
 
-  vvim_desc() {
-    case "$1" in
-      1)
-        cat <<'EOF'
-Search files by filename/path.
+  display_name() {
+    local item="$1"
+    local base
 
-Uses:
-  vfind
-
-Good for:
-  UserService
-  Button.vue
-  routes
-  controller
-EOF
-        ;;
-      2)
-        cat <<'EOF'
-Search inside files with live grep.
-
-Uses:
-  gpick
-
-Good for:
-  function names
-  class names
-  TODO text
-  error messages
-EOF
-        ;;
-      3)
-        cat <<'EOF'
-Find project comments.
-
-Searches:
-  TODO
-  FIXME
-  HACK
-  NOTE
-  BUG
-
-Opens Vim at the selected line.
-EOF
-        ;;
-      4)
-        cat <<'EOF'
-Show changed Git files.
-
-Useful before committing.
-Shows diff preview if your vchanged supports it.
-EOF
-        ;;
-      5)
-        cat <<'EOF'
-Open a file by typing its path.
-
-Example:
-  src/main/scala/UserService.scala
-EOF
-        ;;
-      6)
-        cat <<'EOF'
-Open file at line number.
-
-Example:
-  src/main/scala/UserService.scala:42
-
-Very useful for compiler errors.
-EOF
-        ;;
-      7)
-        cat <<'EOF'
-Create a new file and open it.
-
-Automatically creates parent folders.
-
-Example:
-  src/features/user/UserService.scala
-EOF
-        ;;
-      8)
-        cat <<'EOF'
-Open Vim's built-in file explorer.
-
-This uses plain Vim netrw:
-
-  vim .
-
-No plugins needed.
-EOF
-        ;;
-      9)
-        cat <<'EOF'
-Show Git status.
-
-Useful for quickly checking modified,
-added, deleted, or untracked files.
-EOF
-        ;;
-      10)
-        cat <<'EOF'
-Exit vvim.
-EOF
-        ;;
-    esac
-  }
-
-  vvim_pause() {
-    echo
-    read -p "Press Enter to continue..."
-  }
-
-  vvim_missing() {
-    clear
-    echo "$1 is not installed yet."
-    echo
-    echo "Add the $1 function to your shell config first."
-    vvim_pause
-  }
-
-  vvim_open_file_line() {
-    local input file line
-
-    clear
-    read -p "File:line: " input
-
-    [ -z "$input" ] && return
-
-    file="${input%%:*}"
-    line="${input##*:}"
-
-    if [ ! -f "$file" ]; then
-      echo "File not found: $file"
-      vvim_pause
+    if [ "$item" = "$cwd/.." ]; then
+      echo "../"
       return
     fi
 
-    case "$line" in
-      ''|*[!0-9]*)
+    base=$(basename "$item")
+
+    if [ -d "$item" ]; then
+      echo "$base/"
+    else
+      echo "$base"
+    fi
+  }
+
+  make_preview() {
+    local target="$1"
+    local max="$2"
+    local width="$3"
+    local p base tmpdir
+
+    > "$preview"
+
+    if [ -z "$target" ]; then
+      echo "No file selected." > "$preview"
+      return
+    fi
+
+    if [ -d "$target" ]; then
+      echo "Directory" >> "$preview"
+      echo "" >> "$preview"
+
+      tmpdir="/tmp/vvim-preview-dir-$$"
+      > "$tmpdir"
+
+      for p in "$target"/*; do
+        [ -e "$p" ] || [ -L "$p" ] || continue
+        base=$(basename "$p")
+
+        if [ -d "$p" ]; then
+          printf "[D] %s/\n" "$base" >> "$tmpdir"
+        elif [ -f "$p" ]; then
+          printf "    %s\n" "$base" >> "$tmpdir"
+        fi
+      done
+
+      if [ "$show_hidden" -eq 1 ]; then
+        for p in "$target"/.[!.]* "$target"/..?*; do
+          [ -e "$p" ] || [ -L "$p" ] || continue
+          base=$(basename "$p")
+
+          if [ -d "$p" ]; then
+            printf "[D] %s/\n" "$base" >> "$tmpdir"
+          elif [ -f "$p" ]; then
+            printf "    %s\n" "$base" >> "$tmpdir"
+          fi
+        done
+      fi
+
+      sort -u "$tmpdir" | head -n "$max" >> "$preview"
+      rm -f "$tmpdir"
+      return
+    fi
+
+    if [ ! -r "$target" ]; then
+      echo "Cannot read file." > "$preview"
+      return
+    fi
+
+    if LC_ALL=C grep -Iq '' "$target" 2>/dev/null; then
+      awk -v max="$max" -v width="$width" '
+        BEGIN {
+          if (width < 30) width = 30
+        }
+
+        NR <= max {
+          gsub(/\t/, "  ")
+
+          line = $0
+          limit = width - 8
+
+          if (length(line) > limit) {
+            line = substr(line, 1, limit - 3) "..."
+          }
+
+          printf "%4d  %s\n", NR, line
+        }
+      ' "$target" > "$preview"
+    else
+      echo "Binary file preview skipped." > "$preview"
+    fi
+  }
+
+  draw_vvim() {
+    local rows cols left_width right_col preview_width
+    local list_start list_height preview_height
+    local total end i row item name text target line
+    local branch changed_count hidden_text
+
+    build_entries
+
+    total=$(wc -l < "$entries" | tr -d ' ')
+
+    if [ "$total" -eq 0 ]; then
+      selected=1
+      offset=1
+    fi
+
+    if [ "$selected" -gt "$total" ]; then
+      selected="$total"
+    fi
+
+    if [ "$selected" -lt 1 ]; then
+      selected=1
+    fi
+
+    rows=$(tput lines 2>/dev/null || echo 24)
+    cols=$(tput cols 2>/dev/null || echo 100)
+
+    left_width=$((cols / 2))
+    [ "$left_width" -lt 32 ] && left_width=32
+    [ "$left_width" -gt 55 ] && left_width=55
+
+    right_col=$((left_width + 3))
+    preview_width=$((cols - right_col - 1))
+    [ "$preview_width" -lt 30 ] && preview_width=30
+
+    list_start=5
+    list_height=$((rows - list_start - 1))
+    [ "$list_height" -lt 8 ] && list_height=8
+
+    preview_height=$((rows - list_start - 3))
+    [ "$preview_height" -lt 8 ] && preview_height=8
+
+    if [ "$selected" -lt "$offset" ]; then
+      offset="$selected"
+    fi
+
+    if [ "$selected" -ge $((offset + list_height)) ]; then
+      offset=$((selected - list_height + 1))
+    fi
+
+    end=$((offset + list_height - 1))
+    [ "$end" -gt "$total" ] && end="$total"
+
+    target=$(sed -n "${selected}p" "$entries")
+    make_preview "$target" "$preview_height" "$preview_width"
+
+    if [ "$show_hidden" -eq 1 ]; then
+      hidden_text="on"
+    else
+      hidden_text="off"
+    fi
+
+    clear
+
+    tput cup 0 0
+    printf "\033[1;36mvvim\033[0m  \033[1;33mfake NvChad for plain Vim\033[0m"
+
+    tput cup 1 0
+    printf "\033[90mPath: %s\033[0m" "$cwd"
+
+    tput cup 2 0
+    if git -C "$cwd" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+      branch=$(git -C "$cwd" rev-parse --abbrev-ref HEAD 2>/dev/null)
+      changed_count=$(git -C "$cwd" status --short 2>/dev/null | wc -l | tr -d ' ')
+      printf "\033[90mGit: %s | changed: %s | hidden: %s\033[0m" "$branch" "$changed_count" "$hidden_text"
+    else
+      printf "\033[90mGit: none | hidden: %s\033[0m" "$hidden_text"
+    fi
+
+    tput cup 3 0
+    printf "\033[90mj/k move | Enter open | h parent | f find | g grep | . hidden | q quit\033[0m"
+
+    row=4
+    while [ "$row" -lt "$rows" ]; do
+      tput cup "$row" "$left_width"
+      printf "\033[90m|\033[0m"
+      row=$((row + 1))
+    done
+
+    tput cup 4 0
+    printf "\033[1;32mExplorer\033[0m"
+
+    tput cup 4 "$right_col"
+    printf "\033[1;32mPreview\033[0m"
+
+    i="$offset"
+    row="$list_start"
+
+    while [ "$i" -le "$end" ]; do
+      item=$(sed -n "${i}p" "$entries")
+      name=$(display_name "$item")
+
+      if [ -d "$item" ]; then
+        text="[D] $name"
+      else
+        text="    $name"
+      fi
+
+      tput cup "$row" 0
+
+      if [ "$i" -eq "$selected" ]; then
+        printf "\033[7m%-*.*s\033[0m" "$left_width" "$left_width" "$text"
+      else
+        printf "%-*.*s" "$left_width" "$left_width" "$text"
+      fi
+
+      i=$((i + 1))
+      row=$((row + 1))
+    done
+
+    row=$((list_start + 1))
+
+    while IFS= read -r line; do
+      [ "$row" -ge "$rows" ] && break
+
+      tput cup "$row" "$right_col"
+      printf "%-*.*s" "$preview_width" "$preview_width" "$line"
+
+      row=$((row + 1))
+    done < "$preview"
+
+    tput cup $((rows - 1)) 0
+  }
+
+  open_selected() {
+    local item
+
+    item=$(sed -n "${selected}p" "$entries")
+
+    if [ -z "$item" ]; then
+      return
+    fi
+
+    if [ -d "$item" ]; then
+      cwd=$(cd "$item" 2>/dev/null && pwd -P)
+      selected=1
+      offset=1
+      return
+    fi
+
+    if [ -f "$item" ]; then
+      clear
+      vim "$item"
+    fi
+  }
+
+  go_parent() {
+    if [ "$cwd" != "/" ]; then
+      cwd=$(cd "$cwd/.." 2>/dev/null && pwd -P)
+      selected=1
+      offset=1
+    fi
+  }
+
+  open_by_path() {
+    local file
+
+    clear
+    read -p "Open file: " file
+
+    [ -z "$file" ] && return
+
+    case "$file" in
+      /*)
         vim "$file"
         ;;
       *)
-        vim "+$line" "$file"
+        vim "$cwd/$file"
         ;;
     esac
   }
 
-  vvim_git_status() {
+  new_file() {
+    local file full
+
+    clear
+    read -p "New file: " file
+
+    [ -z "$file" ] && return
+
+    case "$file" in
+      /*)
+        full="$file"
+        ;;
+      *)
+        full="$cwd/$file"
+        ;;
+    esac
+
+    mkdir -p "$(dirname "$full")"
+    vim "$full"
+  }
+
+  show_git_status() {
     clear
 
-    if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    if ! git -C "$cwd" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
       echo "Not inside a Git repository."
-      vvim_pause
+      echo
+      read -p "Press Enter..."
       return
     fi
 
     printf "\033[1;36mGit status\033[0m\n\n"
-    git status --short
+    git -C "$cwd" status --short
 
     echo
-    printf "\033[1;36mBranch:\033[0m "
-    git rev-parse --abbrev-ref HEAD 2>/dev/null
-
-    vvim_pause
-  }
-
-  vvim_run() {
-    local choice="$1"
-    local file input
-
-    case "$choice" in
-      1)
-        if command -v vfind >/dev/null 2>&1; then
-          vfind
-        else
-          vvim_missing "vfind"
-        fi
-        ;;
-      2)
-        if command -v gpick >/dev/null 2>&1; then
-          gpick
-        else
-          vvim_missing "gpick"
-        fi
-        ;;
-      3)
-        if command -v vtodo >/dev/null 2>&1; then
-          vtodo
-        else
-          vvim_missing "vtodo"
-        fi
-        ;;
-      4)
-        if command -v vchanged >/dev/null 2>&1; then
-          vchanged
-        else
-          vvim_missing "vchanged"
-        fi
-        ;;
-      5)
-        clear
-        read -p "File path: " file
-        [ -n "$file" ] && vim "$file"
-        ;;
-      6)
-        vvim_open_file_line
-        ;;
-      7)
-        clear
-        read -p "New file path: " file
-
-        if [ -n "$file" ]; then
-          mkdir -p "$(dirname "$file")"
-          vim "$file"
-        fi
-        ;;
-      8)
-        vim .
-        ;;
-      9)
-        vvim_git_status
-        ;;
-      10)
-        clear
-        return 1
-        ;;
-    esac
-
-    return 0
-  }
-
-  vvim_draw() {
-    local i label key branch changed_count rows cols
-
-    rows=$(tput lines 2>/dev/null || echo 24)
-    cols=$(tput cols 2>/dev/null || echo 80)
-
-    clear
-
-    printf "\033[1;36m"
-    echo " __     ___"
-    echo " \ \   / (_)  ___  ___"
-    echo "  \ \ / /| | / _ \/ __|"
-    echo "   \ V / | ||  __/\__ \\"
-    echo "    \_/  |_| \___||___/"
-    printf "\033[0m"
-
-    printf "\033[1;33mFake Neovim for plain Vim\033[0m\n"
-    printf "\033[90mProject: %s\033[0m\n" "$(pwd)"
-
-    if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-      branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
-      changed_count=$(git status --short 2>/dev/null | wc -l | tr -d ' ')
-      printf "\033[90mGit: %s | changed files: %s\033[0m\n" "$branch" "$changed_count"
-    else
-      printf "\033[90mGit: not a repository\033[0m\n"
-    fi
-
-    printf "\n"
-    printf "\033[90mj/k or arrows = move | Enter = run | ? = help | q = quit\033[0m\n"
-    printf "\033[90m------------------------------------------------------------\033[0m\n\n"
-
-    i=1
-
-    while [ "$i" -le "$total" ]; do
-      label=$(vvim_label "$i")
-      key=$(vvim_key "$i")
-
-      if [ "$i" -eq "$selected" ]; then
-        printf "\033[7m  [%s] %-36s\033[0m\n" "$key" "$label"
-      else
-        printf "  \033[1;32m[%s]\033[0m %-36s\n" "$key" "$label"
-      fi
-
-      i=$((i + 1))
-    done
-
-    printf "\n\033[90m------------------------------------------------------------\033[0m\n"
-    printf "\033[1;36mDetails:\033[0m \033[1;32m%s\033[0m\n\n" "$(vvim_label "$selected")"
-
-    vvim_desc "$selected"
-
-    if [ "$show_help" -eq 1 ]; then
-      printf "\n\033[90m------------------------------------------------------------\033[0m\n"
-      printf "\033[1;36mHelp:\033[0m\n"
-      echo "  f  find files"
-      echo "  g  grep project"
-      echo "  t  todo picker"
-      echo "  c  changed files"
-      echo "  o  open file"
-      echo "  l  open file:line"
-      echo "  n  new file"
-      echo "  e  file explorer"
-      echo "  s  git status"
-      echo "  q  quit"
-    fi
+    read -p "Press Enter..."
   }
 
   while true; do
-    local key rest
+    local key rest total
 
-    vvim_draw
+    draw_vvim
+
+    total=$(wc -l < "$entries" | tr -d ' ')
 
     IFS= read -rsn1 key
 
     case "$key" in
       q|Q)
+        cleanup_vvim
         clear
         return
         ;;
@@ -570,60 +428,63 @@ EOF
         [ "$selected" -gt 1 ] && selected=$((selected - 1))
         ;;
 
-      "")
-        vvim_run "$selected" || return
+      h|H)
+        go_parent
+        ;;
+
+      l|L|"")
+        open_selected
         ;;
 
       f|F)
-        vvim_run 1 || return
+        clear
+        if command -v vfind >/dev/null 2>&1; then
+          vfind "" "" "$cwd"
+        else
+          echo "vfind is not installed yet."
+          read -p "Press Enter..."
+        fi
         ;;
 
       g|G)
-        vvim_run 2 || return
-        ;;
-
-      t|T)
-        vvim_run 3 || return
-        ;;
-
-      c|C)
-        vvim_run 4 || return
-        ;;
-
-      o|O)
-        vvim_run 5 || return
-        ;;
-
-      l|L)
-        vvim_run 6 || return
-        ;;
-
-      n|N)
-        vvim_run 7 || return
-        ;;
-
-      e|E)
-        vvim_run 8 || return
-        ;;
-
-      s|S)
-        vvim_run 9 || return
-        ;;
-
-      h|H|\?)
-        if [ "$show_help" -eq 1 ]; then
-          show_help=0
+        clear
+        if command -v gpick >/dev/null 2>&1; then
+          gpick "" "" "$cwd"
         else
-          show_help=1
+          echo "gpick is not installed yet."
+          read -p "Press Enter..."
         fi
+        ;;
+
+      .)
+        if [ "$show_hidden" -eq 1 ]; then
+          show_hidden=0
+        else
+          show_hidden=1
+        fi
+
+        selected=1
+        offset=1
         ;;
 
       r|R)
         :
         ;;
 
+      o|O)
+        open_by_path
+        ;;
+
+      n|N)
+        new_file
+        ;;
+
+      s|S)
+        show_git_status
+        ;;
+
       $'\033')
-        IFS= read -rsn2 rest
+        IFS= read -rsn2 -t 0.05 rest
 
         case "$rest" in
           "[A")
@@ -631,6 +492,17 @@ EOF
             ;;
           "[B")
             [ "$selected" -lt "$total" ] && selected=$((selected + 1))
+            ;;
+          "[C")
+            open_selected
+            ;;
+          "[D")
+            go_parent
+            ;;
+          *)
+            cleanup_vvim
+            clear
+            return
             ;;
         esac
         ;;
