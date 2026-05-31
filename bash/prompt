@@ -1,0 +1,183 @@
+I want you to help me improve my existing Bash function called `makerflog`.
+
+This is not a standalone script. I want it written as a Bash function like this:
+
+```bash
+makerflog() {
+  ...
+}
+```
+
+## Current behavior
+
+I already have an existing `makerflog` fake TUI.
+
+Right now, it can:
+
+1. Run this build command:
+
+```bash
+rm -f -- *.o
+make
+```
+
+2. If there are no build errors, it shows a build success message.
+
+3. If there are build errors, it shows the errors in a fake TUI list.
+
+4. I can navigate the build errors using:
+
+* `j`
+* `k`
+* arrow up
+* arrow down
+
+5. When I select an error, it opens the file in `vim` at the exact error line.
+
+I will paste my current `makerflog` code later, so please put a placeholder for it first and design the improved version around it.
+
+## New feature I want to add
+
+After a successful build, I want `makerflog` to deploy the generated binary through two machines.
+
+The binary name is:
+
+```bash
+wpg_app_proc
+```
+
+The build happens inside this kind of directory:
+
+```bash
+/data/p4work/<username>/<workspace_root>/stream_target/
+```
+
+The function should help me configure this interactively.
+
+## Workspace behavior
+
+When `makerflog` opens, do not automatically load the previously configured workspace directly.
+
+Instead, ask me first:
+
+```text
+Do you want to change workspace? [y/N]
+```
+
+If I choose yes, show me the available workspaces from:
+
+```bash
+/data/p4work/<username>/
+```
+
+Then let me pick one.
+
+The selected workspace should be saved in a config file.
+
+## Config behavior
+
+Create and use a config file under:
+
+```bash
+~/.config/makerflog/
+```
+
+For example:
+
+```bash
+~/.config/makerflog/config
+```
+
+The config should store:
+
+* local Linux username
+* workspace root
+* build directory
+* binary name
+* Windows username
+* Windows IP address or hostname
+* simulator Linux username
+* simulator Linux IP address or hostname
+* final destination path where the binary should be copied on the simulator machine
+
+If the config is missing, ask the user for these values interactively.
+
+If the config already exists, load it, but still ask first whether the user wants to change workspace.
+
+## Deployment flow
+
+After a successful build:
+
+1. Copy the binary from the local Linux build machine to the Windows machine using `scp`.
+
+2. Then connect to the Windows machine using `ssh`.
+
+3. From the Windows machine, run another `scp` command to copy the binary into the local Linux simulator machine.
+
+The flow is:
+
+```text
+local Linux build machine
+  -> Windows machine
+  -> Linux simulator machine
+```
+
+The script should ask for the correct usernames, IP addresses, and destination path during setup.
+
+## Fake TUI requirements
+
+Keep the fake TUI style.
+
+The function should show a menu like:
+
+```text
+makerflog
+
+Workspace: <workspace_root>
+Binary:    wpg_app_proc
+
+[1] Build only
+[2] Build and deploy
+[3] Change workspace
+[4] Edit config
+[5] Exit
+```
+
+For the build error screen, preserve the existing behavior:
+
+* show errors in a list
+* navigate with `j/k`
+* navigate with arrow keys
+* press Enter to open the file in `vim` at the exact line
+
+For successful build and deploy, show clear status messages like:
+
+```text
+Cleaning object files...
+Building...
+Build success.
+Copying binary to Windows...
+Copying binary to simulator...
+Deploy success.
+```
+
+## Safety requirements
+
+Please make the function safe and careful:
+
+* use `rm -f -- *.o`, not dangerous recursive deletes
+* quote variables properly
+* check if the binary exists before copying
+* check if required commands exist: `ssh`, `scp`, `make`, `vim`
+* show clear error messages
+* do not hardcode usernames or IP addresses
+* avoid deleting or overwriting unexpected files
+* make the config easy to edit manually
+
+## What I want from you
+
+First, review this requirement and ask me any important missing questions.
+
+Then, after I answer, help me design the clean Bash function.
+
+Please keep it compatible with normal Bash and avoid dependencies as much as possible.
