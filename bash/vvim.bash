@@ -12,18 +12,19 @@ Examples:
   vvim ~/work/project
 
 Controls:
-  j / Down Arrow     Move down
-  k / Up Arrow       Move up
-  Enter / l / Right  Enter directory or open file
-  h / Left           Go to parent directory
-  f                  Find files using vfind
-  g                  Grep project using gpick
-  .                  Toggle hidden files
-  r                  Refresh
-  o                  Open file by path
-  n                  New file
-  s                  Git status
-  q / Esc            Quit
+  j / Down Arrow       Move down
+  k / Up Arrow         Move up
+  Enter / l / Right    Enter directory or open file
+  h / Left             Go to parent directory
+  f                    Find files using vfind
+  g                    Grep project using gpick
+  .                    Toggle hidden files
+  p                    Toggle preview
+  r                    Refresh
+  o                    Open file by path
+  n                    New file
+  s                    Git status
+  q / Esc              Quit
 
 Notes:
   Pure Bash + Vim.
@@ -40,20 +41,94 @@ EOF
     return
   fi
 
-  local entries="/tmp/vvim-entries-$$"
-  local dirs="/tmp/vvim-dirs-$$"
-  local files="/tmp/vvim-files-$$"
-  local preview="/tmp/vvim-preview-$$"
+  local tmpdir
+  tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/vvim.XXXXXX") || return
+
+  local entries="$tmpdir/entries"
+  local dirs="$tmpdir/dirs"
+  local files="$tmpdir/files"
+  local preview="$tmpdir/preview"
+
   local selected=1
   local offset=1
+  local total=0
+
   local show_hidden=0
+  local show_preview=1
+
+  local entries_dirty=1
+  local preview_dirty=1
+  local git_dirty=1
+
+  local preview_target=""
+  local preview_width_cache=0
+  local preview_height_cache=0
+
+  local git_text="Git: none"
 
   cleanup_vvim() {
-    rm -f "$entries" "$dirs" "$files" "$preview"
+    tput cnorm 2>/dev/null
+    rm -rf "$tmpdir"
+  }
+
+  vvim_editor() {
+    if [ -n "$VISUAL" ]; then
+      printf "%s\n" "$VISUAL"
+    elif [ -n "$EDITOR" ]; then
+      printf "%s\n" "$EDITOR"
+    elif command -v nvim >/dev/null 2>&1; then
+      printf "%s\n" "nvim"
+    else
+      printf "%s\n" "vim"
+    fi
+  }
+
+  read_vvim_key() {
+    if [ -n "$ZSH_VERSION" ]; then
+      IFS= read -rs -k 1 "$1"
+    else
+      IFS= read -rsn1 "$1"
+    fi
+  }
+
+  read_vvim_key_timeout() {
+    if [ -n "$ZSH_VERSION" ]; then
+      IFS= read -rs -t "$2" -k 1 "$1"
+    else
+      IFS= read -rsn1 -t "$2" "$1"
+    fi
+  }
+
+  mark_dirty() {
+    entries_dirty=1
+    preview_dirty=1
+    git_dirty=1
+  }
+
+  refresh_git() {
+    local branch changed_count
+
+    if [ "$git_dirty" -eq 0 ]; then
+      return
+    fi
+
+    if git -C "$cwd" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+      branch=$(git -C "$cwd" rev-parse --abbrev-ref HEAD 2>/dev/null)
+      changed_count=$(git -C "$cwd" status --short 2>/dev/null | wc -l | tr -d ' ')
+      git_text="Git: $branch | changed: $changed_count"
+    else
+      git_text="Git: none"
+    fi
+
+    git_dirty=0
   }
 
   build_entries() {
     local p
+
+    if [ "$entries_dirty" -eq 0 ]; then
+      return
+    fi
 
     > "$entries"
     > "$dirs"
@@ -87,6 +162,24 @@ EOF
 
     sort -u "$dirs" >> "$entries"
     sort -u "$files" >> "$entries"
+
+    total=$(wc -l < "$entries" | tr -d ' ')
+
+    if [ "$total" -eq 0 ]; then
+      selected=1
+      offset=1
+    fi
+
+    if [ "$selected" -gt "$total" ]; then
+      selected="$total"
+    fi
+
+    if [ "$selected" -lt 1 ]; then
+      selected=1
+    fi
+
+    entries_dirty=0
+    preview_dirty=1
   }
 
   display_name() {
@@ -111,12 +204,33 @@ EOF
     local target="$1"
     local max="$2"
     local width="$3"
-    local p base tmpdir
+    local p base
+
+    if [ "$show_preview" -eq 0 ]; then
+      > "$preview"
+      echo "Preview disabled." >> "$preview"
+      echo "" >> "$preview"
+      echo "Press p to enable preview again." >> "$preview"
+      preview_dirty=0
+      return
+    fi
+
+    if [ "$preview_dirty" -eq 0 ] &&
+       [ "$target" = "$preview_target" ] &&
+       [ "$width" -eq "$preview_width_cache" ] &&
+       [ "$max" -eq "$preview_height_cache" ]; then
+      return
+    fi
 
     > "$preview"
 
+    preview_target="$target"
+    preview_width_cache="$width"
+    preview_height_cache="$max"
+
     if [ -z "$target" ]; then
       echo "No file selected." > "$preview"
+      preview_dirty=0
       return
     fi
 
@@ -124,17 +238,17 @@ EOF
       echo "Directory" >> "$preview"
       echo "" >> "$preview"
 
-      tmpdir="/tmp/vvim-preview-dir-$$"
-      > "$tmpdir"
+      local dir_preview="$tmpdir/preview-dir"
+      > "$dir_preview"
 
       for p in "$target"/*; do
         [ -e "$p" ] || [ -L "$p" ] || continue
         base=$(basename "$p")
 
         if [ -d "$p" ]; then
-          printf "[D] %s/\n" "$base" >> "$tmpdir"
+          printf "[D] %s/\n" "$base" >> "$dir_preview"
         elif [ -f "$p" ]; then
-          printf "    %s\n" "$base" >> "$tmpdir"
+          printf "    %s\n" "$base" >> "$dir_preview"
         fi
       done
 
@@ -144,20 +258,23 @@ EOF
           base=$(basename "$p")
 
           if [ -d "$p" ]; then
-            printf "[D] %s/\n" "$base" >> "$tmpdir"
+            printf "[D] %s/\n" "$base" >> "$dir_preview"
           elif [ -f "$p" ]; then
-            printf "    %s\n" "$base" >> "$tmpdir"
+            printf "    %s\n" "$base" >> "$dir_preview"
           fi
         done
       fi
 
-      sort -u "$tmpdir" | head -n "$max" >> "$preview"
-      rm -f "$tmpdir"
+      sort -u "$dir_preview" | head -n "$max" >> "$preview"
+      rm -f "$dir_preview"
+
+      preview_dirty=0
       return
     fi
 
     if [ ! -r "$target" ]; then
       echo "Cannot read file." > "$preview"
+      preview_dirty=0
       return
     fi
 
@@ -183,30 +300,18 @@ EOF
     else
       echo "Binary file preview skipped." > "$preview"
     fi
+
+    preview_dirty=0
   }
 
   draw_vvim() {
     local rows cols left_width right_col preview_width
     local list_start list_height preview_height
-    local total end i row item name text target line
-    local branch changed_count hidden_text
+    local end i row item name text target line entry_index
+    local hidden_text preview_text
 
     build_entries
-
-    total=$(wc -l < "$entries" | tr -d ' ')
-
-    if [ "$total" -eq 0 ]; then
-      selected=1
-      offset=1
-    fi
-
-    if [ "$selected" -gt "$total" ]; then
-      selected="$total"
-    fi
-
-    if [ "$selected" -lt 1 ]; then
-      selected=1
-    fi
+    refresh_git
 
     rows=$(tput lines 2>/dev/null || echo 24)
     cols=$(tput cols 2>/dev/null || echo 100)
@@ -237,7 +342,7 @@ EOF
     end=$((offset + list_height - 1))
     [ "$end" -gt "$total" ] && end="$total"
 
-    target=$(sed -n "${selected}p" "$entries")
+    target=$(awk -v selected="$selected" 'NR == selected { print; exit }' "$entries")
     make_preview "$target" "$preview_height" "$preview_width"
 
     if [ "$show_hidden" -eq 1 ]; then
@@ -246,6 +351,13 @@ EOF
       hidden_text="off"
     fi
 
+    if [ "$show_preview" -eq 1 ]; then
+      preview_text="on"
+    else
+      preview_text="off"
+    fi
+
+    tput civis 2>/dev/null
     clear
 
     tput cup 0 0
@@ -255,16 +367,10 @@ EOF
     printf "\033[90mPath: %s\033[0m" "$cwd"
 
     tput cup 2 0
-    if git -C "$cwd" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-      branch=$(git -C "$cwd" rev-parse --abbrev-ref HEAD 2>/dev/null)
-      changed_count=$(git -C "$cwd" status --short 2>/dev/null | wc -l | tr -d ' ')
-      printf "\033[90mGit: %s | changed: %s | hidden: %s\033[0m" "$branch" "$changed_count" "$hidden_text"
-    else
-      printf "\033[90mGit: none | hidden: %s\033[0m" "$hidden_text"
-    fi
+    printf "\033[90m%s | hidden: %s | preview: %s\033[0m" "$git_text" "$hidden_text" "$preview_text"
 
     tput cup 3 0
-    printf "\033[90mj/k move | Enter open | h parent | f find | g grep | . hidden | q quit\033[0m"
+    printf "\033[90mj/k/arrows move | Enter open | h/Left parent | f find | g grep | p preview | r refresh | q quit\033[0m"
 
     row=4
     while [ "$row" -lt "$rows" ]; do
@@ -281,9 +387,14 @@ EOF
 
     i="$offset"
     row="$list_start"
+    entry_index=0
 
-    while [ "$i" -le "$end" ]; do
-      item=$(sed -n "${i}p" "$entries")
+    while IFS= read -r item; do
+      entry_index=$((entry_index + 1))
+
+      [ "$entry_index" -lt "$offset" ] && continue
+      [ "$entry_index" -gt "$end" ] && break
+
       name=$(display_name "$item")
 
       if [ -d "$item" ]; then
@@ -294,15 +405,14 @@ EOF
 
       tput cup "$row" 0
 
-      if [ "$i" -eq "$selected" ]; then
+      if [ "$entry_index" -eq "$selected" ]; then
         printf "\033[7m%-*.*s\033[0m" "$left_width" "$left_width" "$text"
       else
         printf "%-*.*s" "$left_width" "$left_width" "$text"
       fi
 
-      i=$((i + 1))
       row=$((row + 1))
-    done
+    done < "$entries"
 
     row=$((list_start + 1))
 
@@ -318,10 +428,24 @@ EOF
     tput cup $((rows - 1)) 0
   }
 
+  move_down() {
+    if [ "$selected" -lt "$total" ]; then
+      selected=$((selected + 1))
+      preview_dirty=1
+    fi
+  }
+
+  move_up() {
+    if [ "$selected" -gt 1 ]; then
+      selected=$((selected - 1))
+      preview_dirty=1
+    fi
+  }
+
   open_selected() {
     local item
 
-    item=$(sed -n "${selected}p" "$entries")
+    item=$(awk -v selected="$selected" 'NR == selected { print; exit }' "$entries")
 
     if [ -z "$item" ]; then
       return
@@ -331,12 +455,18 @@ EOF
       cwd=$(cd "$item" 2>/dev/null && pwd -P)
       selected=1
       offset=1
+      mark_dirty
       return
     fi
 
     if [ -f "$item" ]; then
+      local editor
+      editor=$(vvim_editor)
+      tput cnorm 2>/dev/null
       clear
-      vim "$item"
+      command $editor "$item"
+      preview_dirty=1
+      git_dirty=1
     fi
   }
 
@@ -345,12 +475,14 @@ EOF
       cwd=$(cd "$cwd/.." 2>/dev/null && pwd -P)
       selected=1
       offset=1
+      mark_dirty
     fi
   }
 
   open_by_path() {
     local file
 
+    tput cnorm 2>/dev/null
     clear
     read -p "Open file: " file
 
@@ -358,17 +490,23 @@ EOF
 
     case "$file" in
       /*)
-        vim "$file"
+        tput cnorm 2>/dev/null
+        command $(vvim_editor) "$file"
         ;;
       *)
-        vim "$cwd/$file"
+        tput cnorm 2>/dev/null
+        command $(vvim_editor) "$cwd/$file"
         ;;
     esac
+
+    preview_dirty=1
+    git_dirty=1
   }
 
   new_file() {
     local file full
 
+    tput cnorm 2>/dev/null
     clear
     read -p "New file: " file
 
@@ -384,10 +522,14 @@ EOF
     esac
 
     mkdir -p "$(dirname "$full")"
-    vim "$full"
+    tput cnorm 2>/dev/null
+    command $(vvim_editor) "$full"
+
+    mark_dirty
   }
 
   show_git_status() {
+    tput cnorm 2>/dev/null
     clear
 
     if ! git -C "$cwd" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
@@ -402,16 +544,20 @@ EOF
 
     echo
     read -p "Press Enter..."
+
+    git_dirty=1
   }
 
   while true; do
-    local key rest total
+    local key k1 k2 rest
 
     draw_vvim
 
-    total=$(wc -l < "$entries" | tr -d ' ')
-
-    IFS= read -rsn1 key
+    if ! read_vvim_key key; then
+      cleanup_vvim
+      clear
+      return
+    fi
 
     case "$key" in
       q|Q)
@@ -421,11 +567,11 @@ EOF
         ;;
 
       j)
-        [ "$selected" -lt "$total" ] && selected=$((selected + 1))
+        move_down
         ;;
 
       k)
-        [ "$selected" -gt 1 ] && selected=$((selected - 1))
+        move_up
         ;;
 
       h|H)
@@ -437,9 +583,12 @@ EOF
         ;;
 
       f|F)
+        tput cnorm 2>/dev/null
         clear
+
         if command -v vfind >/dev/null 2>&1; then
           vfind "" "" "$cwd"
+          mark_dirty
         else
           echo "vfind is not installed yet."
           read -p "Press Enter..."
@@ -447,9 +596,12 @@ EOF
         ;;
 
       g|G)
+        tput cnorm 2>/dev/null
         clear
+
         if command -v gpick >/dev/null 2>&1; then
           gpick "" "" "$cwd"
+          mark_dirty
         else
           echo "gpick is not installed yet."
           read -p "Press Enter..."
@@ -465,10 +617,21 @@ EOF
 
         selected=1
         offset=1
+        mark_dirty
+        ;;
+
+      p|P)
+        if [ "$show_preview" -eq 1 ]; then
+          show_preview=0
+        else
+          show_preview=1
+        fi
+
+        preview_dirty=1
         ;;
 
       r|R)
-        :
+        mark_dirty
         ;;
 
       o|O)
@@ -484,22 +647,25 @@ EOF
         ;;
 
       $'\033')
-        IFS= read -rsn2 -t 0.05 rest
+        read_vvim_key_timeout k1 1
+        read_vvim_key_timeout k2 1
+
+        rest="${k1}${k2}"
 
         case "$rest" in
-          "[A")
-            [ "$selected" -gt 1 ] && selected=$((selected - 1))
+          "[A"|OA)
+            move_up
             ;;
-          "[B")
-            [ "$selected" -lt "$total" ] && selected=$((selected + 1))
+          "[B"|OB)
+            move_down
             ;;
-          "[C")
+          "[C"|OC)
             open_selected
             ;;
-          "[D")
+          "[D"|OD)
             go_parent
             ;;
-          *)
+          "")
             cleanup_vvim
             clear
             return

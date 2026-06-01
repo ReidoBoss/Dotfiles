@@ -29,8 +29,11 @@ EOF
   local exts="$2"
   local dir="${3:-.}"
 
-  local all="/tmp/vfind-all-$$"
-  local filtered="/tmp/vfind-filtered-$$"
+  local tmpdir
+  tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/vfind.XXXXXX") || return
+
+  local all="$tmpdir/all"
+  local filtered="$tmpdir/filtered"
 
   local scanned=0
   local dirty=1
@@ -40,6 +43,39 @@ EOF
 
   > "$all"
   > "$filtered"
+
+  cleanup_vfind() {
+    tput cnorm 2>/dev/null
+    rm -rf "$tmpdir"
+  }
+
+  vfind_editor() {
+    if [ -n "$VISUAL" ]; then
+      printf "%s\n" "$VISUAL"
+    elif [ -n "$EDITOR" ]; then
+      printf "%s\n" "$EDITOR"
+    elif command -v nvim >/dev/null 2>&1; then
+      printf "%s\n" "nvim"
+    else
+      printf "%s\n" "vim"
+    fi
+  }
+
+  read_vfind_key() {
+    if [ -n "$ZSH_VERSION" ]; then
+      IFS= read -rs -k 1 "$1"
+    else
+      IFS= read -rsn1 "$1"
+    fi
+  }
+
+  read_vfind_keys_timeout() {
+    if [ -n "$ZSH_VERSION" ]; then
+      IFS= read -rs -t "$3" -k "$2" "$1"
+    else
+      IFS= read -rsn"$2" -t "$3" "$1"
+    fi
+  }
 
   scan_files() {
     > "$all"
@@ -94,7 +130,7 @@ EOF
   }
 
   draw_vfind() {
-    local rows list_height preview_height end i current_file preview_file status
+    local rows list_height preview_height end preview_file search_status
 
     rows=$(tput lines 2>/dev/null || echo 24)
 
@@ -111,13 +147,14 @@ EOF
     [ "$end" -gt "$total" ] && end="$total"
 
     if [ "$dirty" -eq 1 ]; then
-      status="not searched yet"
+      search_status="not searched yet"
     else
-      status="searched"
+      search_status="searched"
     fi
 
+    tput civis 2>/dev/null
     clear
-    printf "\033[1;36mvfind lazy\033[0m  query: \033[1;33m%s\033[0m  matches: %s  \033[90m%s\033[0m\n" "$query" "$total" "$status"
+    printf "\033[1;36mvfind lazy\033[0m  query: \033[1;33m%s\033[0m  matches: %s  \033[90m%s\033[0m\n" "$query" "$total" "$search_status"
     printf "\033[90mtype = edit | Tab = search | Enter = search/open | Ctrl+r = rescan | Esc = quit\033[0m\n\n"
 
     if [ "$dirty" -eq 1 ]; then
@@ -130,21 +167,19 @@ EOF
       return
     fi
 
-    i="$offset"
+    awk -v start="$offset" -v end="$end" -v selected="$selected_num" '
+      NR < start { next }
+      NR > end { exit }
+      NR == selected {
+        printf "\033[7m%3s) %s\033[0m\n", NR, $0
+        next
+      }
+      {
+        printf "\033[1;32m%3s)\033[0m %s\n", NR, $0
+      }
+    ' "$filtered"
 
-    while [ "$i" -le "$end" ]; do
-      current_file=$(sed -n "${i}p" "$filtered")
-
-      if [ "$i" -eq "$selected_num" ]; then
-        printf "\033[7m%3s) %s\033[0m\n" "$i" "$current_file"
-      else
-        printf "\033[1;32m%3s)\033[0m %s\n" "$i" "$current_file"
-      fi
-
-      i=$((i + 1))
-    done
-
-    preview_file=$(sed -n "${selected_num}p" "$filtered")
+    preview_file=$(awk -v selected="$selected_num" 'NR == selected { print; exit }' "$filtered")
 
     printf "\n\033[1;36mPreview:\033[0m \033[1;32m%s\033[0m\n" "$preview_file"
     printf "\033[90m────────────────────────────────────────\033[0m\n"
@@ -164,7 +199,11 @@ EOF
     draw_vfind
 
     local key rest file editor
-    IFS= read -rsn1 key
+    if ! read_vfind_key key; then
+      cleanup_vfind
+      clear
+      return
+    fi
 
     case "$key" in
       "")
@@ -174,11 +213,12 @@ EOF
         fi
 
         file=$(sed -n "${selected_num}p" "$filtered")
-        rm -f "$all" "$filtered"
+        cleanup_vfind
 
         editor="${EDITOR:-vim}"
+        editor=$(vfind_editor)
         clear
-        "$editor" "$file"
+        command $editor "$file"
         return
         ;;
 
@@ -214,7 +254,7 @@ EOF
         ;;
 
       $'\033')
-        IFS= read -rsn2 -t 0.05 rest
+        read_vfind_keys_timeout rest 2 1
 
         case "$rest" in
           "[A")
@@ -224,7 +264,7 @@ EOF
             [ "$selected_num" -lt "$total" ] && selected_num=$((selected_num + 1))
             ;;
           *)
-            rm -f "$all" "$filtered"
+            cleanup_vfind
             clear
             return
             ;;
