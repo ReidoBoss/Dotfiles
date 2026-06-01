@@ -1,7 +1,7 @@
 gpick() {
-  if [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
+  if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
     cat <<'EOF'
-gpick - live grep picker with preview using pure old Bash
+gpick - lazy grep picker with preview using pure old Bash
 
 Usage:
   gpick [initial search] [extensions] [directory]
@@ -13,84 +13,115 @@ Examples:
   gpick "TODO" "" .
 
 Controls:
-  Type text      Grep files live
+  Type text      Edit grep query only
+  Tab            Search
+  Enter          Search if changed, otherwise open selected file at first match
   Backspace      Delete character
-  Ctrl+u         Clear search
+  Ctrl+u         Clear query
+  Ctrl+r         Rescan with the current query
   Down / Ctrl+n  Move down
   Up / Ctrl+p    Move up
-  Enter          Open selected file at first match
   Esc            Quit
 
 Notes:
-  Pure Bash version. No fzf, no plugins, no mapfile.
-  Ignores .git, node_modules, dist, build, and target.
+  Pure Bash version. No fzf, no plugins, no mapfile, no ripgrep.
+  Searches only when Tab, Enter, or Ctrl+r is pressed.
+  Grep prunes .git, node_modules, vendor, dist, build, target, coverage,
+  .next, .nuxt, .cache, tmp, and similar generated directories.
 EOF
     return
   fi
 
-  local query="$1"
-  local exts="$2"
+  local query="${1:-}"
+  local exts="${2:-}"
   local dir="${3:-.}"
 
-  local all="/tmp/gpick-all-$$"
-  local filtered="/tmp/gpick-filtered-$$"
+  local tmpdir
+  tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/gpick.XXXXXX") || return 1
 
-  > "$all"
-  > "$filtered"
-
-  if [ -z "$exts" ]; then
-    find "$dir" \
-      -type d \( -name .git -o -name node_modules -o -name dist -o -name build -o -name target \) -prune -o \
-      -type f -print 2>/dev/null \
-      > "$all"
-  else
-    local old_ifs ext
-    old_ifs="$IFS"
-    IFS=","
-
-    for ext in $exts; do
-      ext="${ext// /}"
-      ext="${ext#.}"
-
-      find "$dir" \
-        -type d \( -name .git -o -name node_modules -o -name dist -o -name build -o -name target \) -prune -o \
-        -type f -name "*.$ext" -print 2>/dev/null \
-        >> "$all"
-    done
-
-    IFS="$old_ifs"
-    sort -u "$all" -o "$all"
-  fi
-
-  if [ ! -s "$all" ]; then
-    echo "No files found."
-    rm -f "$all" "$filtered"
-    return
-  fi
-
+  local filtered="$tmpdir/filtered"
   local selected_num=1
   local offset=1
   local total=0
+  local dirty=1
+
+  > "$filtered"
+
+  cleanup_gpick() {
+    tput cnorm 2>/dev/null
+    rm -rf "$tmpdir"
+  }
+
+  gpick_editor() {
+    if [ -n "${VISUAL:-}" ]; then
+      printf "%s\n" "$VISUAL"
+    elif [ -n "${EDITOR:-}" ]; then
+      printf "%s\n" "$EDITOR"
+    else
+      printf "%s\n" "vim"
+    fi
+  }
+
+  read_gpick_key() {
+    if [ -n "${ZSH_VERSION:-}" ]; then
+      IFS= read -rs -k 1 "$1"
+    else
+      IFS= read -rsn1 "$1"
+    fi
+  }
+
+  read_gpick_keys_timeout() {
+    if [ -n "${ZSH_VERSION:-}" ]; then
+      IFS= read -rs -t "$3" -k "$2" "$1"
+    else
+      IFS= read -rsn"$2" -t "$3" "$1"
+    fi
+  }
 
   update_filter() {
+    local old_ifs ext
+
     > "$filtered"
 
     if [ -z "$query" ]; then
       total=0
       selected_num=1
       offset=1
+      dirty=0
       return
     fi
 
-    while IFS= read -r file; do
-      grep -Il -- "$query" "$file" 2>/dev/null
-    done < "$all" > "$filtered"
+    if [ -z "$exts" ]; then
+      find "$dir" \
+        -type d \( -name .git -o -name .hg -o -name .svn -o -name node_modules -o -name vendor -o -name dist -o -name build -o -name target -o -name coverage -o -name .next -o -name .nuxt -o -name .cache -o -name .parcel-cache -o -name __pycache__ -o -name tmp -o -name temp \) -prune -o \
+        -type f -exec grep -Il -- "$query" {} + 2>/dev/null \
+        > "$filtered"
+    else
+      old_ifs="$IFS"
+      IFS=","
+
+      for ext in $exts; do
+        ext="${ext// /}"
+        ext="${ext#.}"
+
+        [ -z "$ext" ] && continue
+
+        find "$dir" \
+          -type d \( -name .git -o -name .hg -o -name .svn -o -name node_modules -o -name vendor -o -name dist -o -name build -o -name target -o -name coverage -o -name .next -o -name .nuxt -o -name .cache -o -name .parcel-cache -o -name __pycache__ -o -name tmp -o -name temp \) -prune -o \
+          -type f -name "*.$ext" -exec grep -Il -- "$query" {} + 2>/dev/null \
+          >> "$filtered"
+      done
+
+      IFS="$old_ifs"
+      sort -u "$filtered" -o "$filtered"
+    fi
 
     total=$(wc -l < "$filtered" | tr -d ' ')
 
     if [ "$total" -eq 0 ]; then
       selected_num=1
       offset=1
+      dirty=0
       return
     fi
 
@@ -101,12 +132,14 @@ EOF
     if [ "$selected_num" -lt 1 ]; then
       selected_num=1
     fi
+
+    dirty=0
   }
 
   draw_gpick() {
-    local rows list_height preview_height end i current_file preview_file
+    local rows list_height preview_height end current_file preview_file search_status
 
-    rows=$(tput lines 2>/dev/null || echo 24)
+    rows=$(tput lines 2>/dev/null || printf "24\n")
 
     list_height=$((rows / 2 - 4))
     [ "$list_height" -lt 5 ] && list_height=5
@@ -114,47 +147,52 @@ EOF
     preview_height=$((rows - list_height - 8))
     [ "$preview_height" -lt 5 ] && preview_height=5
 
-    if [ "$selected_num" -lt "$offset" ]; then
-      offset="$selected_num"
-    fi
-
-    if [ "$selected_num" -ge $((offset + list_height)) ]; then
-      offset=$((selected_num - list_height + 1))
-    fi
+    [ "$selected_num" -lt "$offset" ] && offset="$selected_num"
+    [ "$selected_num" -ge $((offset + list_height)) ] && offset=$((selected_num - list_height + 1))
 
     end=$((offset + list_height - 1))
     [ "$end" -gt "$total" ] && end="$total"
 
+    if [ "$dirty" -eq 1 ]; then
+      search_status="not searched yet"
+    else
+      search_status="searched"
+    fi
+
+    tput civis 2>/dev/null
     clear
 
-    printf "\033[1;36mgpick live\033[0m  grep: \033[1;33m%s\033[0m  matches: %s\n" "$query" "$total"
-    printf "\033[90mtype = grep | arrows/Ctrl+n/Ctrl+p = move | Ctrl+u = clear | Enter = open | Esc = quit\033[0m\n\n"
+    printf "\033[1;36mgpick lazy\033[0m  grep: \033[1;33m%s\033[0m  matches: %s  \033[90m%s\033[0m\n" "$query" "$total" "$search_status"
+    printf "\033[90mtype = edit | Tab = search | Enter = search/open | Ctrl+r = rescan | Esc = quit\033[0m\n\n"
+
+    if [ "$dirty" -eq 1 ]; then
+      printf "Press Tab or Enter to grep.\n"
+      return
+    fi
 
     if [ -z "$query" ]; then
-      echo "Start typing to grep files..."
+      printf "Type a grep query, then press Tab or Enter.\n"
       return
     fi
 
     if [ "$total" -eq 0 ]; then
-      echo "No matching files."
+      printf "No matching files.\n"
       return
     fi
 
-    i="$offset"
+    awk -v start="$offset" -v end="$end" -v selected="$selected_num" '
+      NR < start { next }
+      NR > end { exit }
+      NR == selected {
+        printf "\033[7m%3s) %s\033[0m\n", NR, $0
+        next
+      }
+      {
+        printf "\033[1;32m%3s)\033[0m %s\n", NR, $0
+      }
+    ' "$filtered"
 
-    while [ "$i" -le "$end" ]; do
-      current_file=$(sed -n "${i}p" "$filtered")
-
-      if [ "$i" -eq "$selected_num" ]; then
-        printf "\033[7m%3s) %s\033[0m\n" "$i" "$current_file"
-      else
-        printf "\033[1;32m%3s)\033[0m %s\n" "$i" "$current_file"
-      fi
-
-      i=$((i + 1))
-    done
-
-    preview_file=$(sed -n "${selected_num}p" "$filtered")
+    preview_file=$(awk -v selected="$selected_num" 'NR == selected { print; exit }' "$filtered")
 
     printf "\n\033[1;36mPreview:\033[0m \033[1;32m%s\033[0m\n" "$preview_file"
     printf "\033[90m────────────────────────────────────────\033[0m\n"
@@ -163,62 +201,74 @@ EOF
       head -n "$preview_height"
   }
 
-  update_filter
-
   while true; do
-    draw_gpick
-
     local key rest file editor line
 
-    IFS= read -rsn1 key
+    draw_gpick
+
+    if ! read_gpick_key key; then
+      cleanup_gpick
+      clear
+      return
+    fi
 
     case "$key" in
       "")
-        if [ "$total" -eq 0 ]; then
+        if [ "$dirty" -eq 1 ] || [ "$total" -eq 0 ]; then
+          update_filter
           continue
         fi
 
-        file=$(sed -n "${selected_num}p" "$filtered")
+        file=$(awk -v selected="$selected_num" 'NR == selected { print; exit }' "$filtered")
         line=$(grep -n -m 1 -- "$query" "$file" 2>/dev/null | cut -d: -f1)
 
-        rm -f "$all" "$filtered"
-
-        editor="${EDITOR:-vim}"
+        cleanup_gpick
         clear
 
-        if echo "$editor" | grep -q "vim" && [ -n "$line" ]; then
-          "$editor" "+$line" "$file"
+        editor=$(gpick_editor)
+
+        if printf "%s\n" "$editor" | grep -q "vim" && [ -n "$line" ]; then
+          command $editor "+$line" "$file"
         else
-          "$editor" "$file"
+          command $editor "$file"
         fi
 
         return
         ;;
 
+      $'\t')
+        update_filter
+        ;;
+
       $'\177'|$'\b')
         query="${query%?}"
-        selected_num=1
-        offset=1
-        update_filter
+        dirty=1
         ;;
 
       $'\025')
         query=""
+        total=0
         selected_num=1
         offset=1
+        > "$filtered"
+        dirty=0
+        ;;
+
+      $'\022')
+        dirty=1
         update_filter
         ;;
 
-      $'\016')
+      $'\016'|j)
         [ "$selected_num" -lt "$total" ] && selected_num=$((selected_num + 1))
         ;;
 
-      $'\020')
+      $'\020'|k)
         [ "$selected_num" -gt 1 ] && selected_num=$((selected_num - 1))
         ;;
 
       $'\033')
-        IFS= read -rsn2 -t 0.05 rest
+        read_gpick_keys_timeout rest 2 1
 
         case "$rest" in
           "[A")
@@ -228,7 +278,7 @@ EOF
             [ "$selected_num" -lt "$total" ] && selected_num=$((selected_num + 1))
             ;;
           *)
-            rm -f "$all" "$filtered"
+            cleanup_gpick
             clear
             return
             ;;
@@ -237,9 +287,7 @@ EOF
 
       *)
         query="${query}${key}"
-        selected_num=1
-        offset=1
-        update_filter
+        dirty=1
         ;;
     esac
   done

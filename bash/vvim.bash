@@ -1,677 +1,433 @@
 vvim() {
-  if [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
+  if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
     cat <<'EOF'
-vvim - fake Neovim/NvChad-like explorer for plain Vim
+vvim - fake NvChad-like TUI using plain Vim only
 
 Usage:
-  vvim [directory]
+  vvim [path]
 
 Examples:
   vvim
   vvim src
-  vvim ~/work/project
+  vvim README.md
 
 Controls:
-  j / Down Arrow       Move down
-  k / Up Arrow         Move up
-  Enter / l / Right    Enter directory or open file
-  h / Left             Go to parent directory
-  f                    Find files using vfind
-  g                    Grep project using gpick
-  .                    Toggle hidden files
-  p                    Toggle preview
-  r                    Refresh
-  o                    Open file by path
-  n                    New file
-  s                    Git status
-  q / Esc              Quit
+  Space e        Toggle the folder tree
+  Space f f      Find files with Vim quickfix, unless focused in the tree
+  Space f w      Grep project with grep + find pruning, unless focused in the tree
+  Space f r      Recent files under the current project
+  Space b        Open listed buffers through quickfix
+  Space h        Open vvim help/dashboard
+  Space q        Close quickfix
+  [q / ]q        Previous / next quickfix item
+  Alt t          Toggle a floating terminal when Vim supports popups + terminal
+  Alt h/l        Resize vertical panes
+  Alt j/k        Resize horizontal panes
+  Ctrl-w h/l     Move between tree and editor panes
+  Ctrl-w </>     Resize vertical panes using Vim's native controls
+  Ctrl-w +/-     Resize horizontal panes using Vim's native controls
+  Enter          Open quickfix result or tree file
 
 Notes:
-  Pure Bash + Vim.
-  No plugins. No fzf. No Neovim. No mapfile.
+  Uses Vim, netrw, quickfix, find, grep, and an optional Vim terminal.
+  No Neovim, plugins, fzf, ripgrep, package managers, or install steps.
+  Grep prunes .git, node_modules, vendor, dist, build, target, coverage,
+  .next, .cache, tmp, and similar large generated directories.
 EOF
     return
   fi
 
-  local cwd
-  cwd=$(cd "${1:-.}" 2>/dev/null && pwd -P)
-
-  if [ -z "$cwd" ]; then
-    echo "Directory not found: ${1:-.}"
-    return
+  if ! command -v vim >/dev/null 2>&1; then
+    printf "vvim: vim was not found in PATH.\n" >&2
+    return 1
   fi
 
-  local tmpdir
-  tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/vvim.XXXXXX") || return
-
-  local entries="$tmpdir/entries"
-  local dirs="$tmpdir/dirs"
-  local files="$tmpdir/files"
-  local preview="$tmpdir/preview"
-
-  local selected=1
-  local offset=1
-  local total=0
-
-  local show_hidden=0
-  local show_preview=1
-
-  local entries_dirty=1
-  local preview_dirty=1
-  local git_dirty=1
-
-  local preview_target=""
-  local preview_width_cache=0
-  local preview_height_cache=0
-
-  local git_text="Git: none"
-
-  cleanup_vvim() {
-    tput cnorm 2>/dev/null
-    rm -rf "$tmpdir"
-  }
-
-  vvim_editor() {
-    if [ -n "$VISUAL" ]; then
-      printf "%s\n" "$VISUAL"
-    elif [ -n "$EDITOR" ]; then
-      printf "%s\n" "$EDITOR"
-    elif command -v nvim >/dev/null 2>&1; then
-      printf "%s\n" "nvim"
-    else
-      printf "%s\n" "vim"
-    fi
-  }
-
-  read_vvim_key() {
-    if [ -n "$ZSH_VERSION" ]; then
-      IFS= read -rs -k 1 "$1"
-    else
-      IFS= read -rsn1 "$1"
-    fi
-  }
-
-  read_vvim_key_timeout() {
-    if [ -n "$ZSH_VERSION" ]; then
-      IFS= read -rs -t "$2" -k 1 "$1"
-    else
-      IFS= read -rsn1 -t "$2" "$1"
-    fi
-  }
-
-  mark_dirty() {
-    entries_dirty=1
-    preview_dirty=1
-    git_dirty=1
-  }
-
-  refresh_git() {
-    local branch changed_count
-
-    if [ "$git_dirty" -eq 0 ]; then
-      return
-    fi
-
-    if git -C "$cwd" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-      branch=$(git -C "$cwd" rev-parse --abbrev-ref HEAD 2>/dev/null)
-      changed_count=$(git -C "$cwd" status --short 2>/dev/null | wc -l | tr -d ' ')
-      git_text="Git: $branch | changed: $changed_count"
-    else
-      git_text="Git: none"
-    fi
-
-    git_dirty=0
-  }
-
-  build_entries() {
-    local p
-
-    if [ "$entries_dirty" -eq 0 ]; then
-      return
-    fi
-
-    > "$entries"
-    > "$dirs"
-    > "$files"
-
-    if [ "$cwd" != "/" ]; then
-      printf "%s\n" "$cwd/.." >> "$entries"
-    fi
-
-    for p in "$cwd"/*; do
-      [ -e "$p" ] || [ -L "$p" ] || continue
-
-      if [ -d "$p" ]; then
-        printf "%s\n" "$p" >> "$dirs"
-      elif [ -f "$p" ]; then
-        printf "%s\n" "$p" >> "$files"
-      fi
-    done
-
-    if [ "$show_hidden" -eq 1 ]; then
-      for p in "$cwd"/.[!.]* "$cwd"/..?*; do
-        [ -e "$p" ] || [ -L "$p" ] || continue
-
-        if [ -d "$p" ]; then
-          printf "%s\n" "$p" >> "$dirs"
-        elif [ -f "$p" ]; then
-          printf "%s\n" "$p" >> "$files"
-        fi
-      done
-    fi
-
-    sort -u "$dirs" >> "$entries"
-    sort -u "$files" >> "$entries"
-
-    total=$(wc -l < "$entries" | tr -d ' ')
-
-    if [ "$total" -eq 0 ]; then
-      selected=1
-      offset=1
-    fi
-
-    if [ "$selected" -gt "$total" ]; then
-      selected="$total"
-    fi
-
-    if [ "$selected" -lt 1 ]; then
-      selected=1
-    fi
-
-    entries_dirty=0
-    preview_dirty=1
-  }
-
-  display_name() {
-    local item="$1"
-    local base
-
-    if [ "$item" = "$cwd/.." ]; then
-      echo "../"
-      return
-    fi
-
-    base=$(basename "$item")
-
-    if [ -d "$item" ]; then
-      echo "$base/"
-    else
-      echo "$base"
-    fi
-  }
-
-  make_preview() {
-    local target="$1"
-    local max="$2"
-    local width="$3"
-    local p base
-
-    if [ "$show_preview" -eq 0 ]; then
-      > "$preview"
-      echo "Preview disabled." >> "$preview"
-      echo "" >> "$preview"
-      echo "Press p to enable preview again." >> "$preview"
-      preview_dirty=0
-      return
-    fi
-
-    if [ "$preview_dirty" -eq 0 ] &&
-       [ "$target" = "$preview_target" ] &&
-       [ "$width" -eq "$preview_width_cache" ] &&
-       [ "$max" -eq "$preview_height_cache" ]; then
-      return
-    fi
-
-    > "$preview"
-
-    preview_target="$target"
-    preview_width_cache="$width"
-    preview_height_cache="$max"
-
-    if [ -z "$target" ]; then
-      echo "No file selected." > "$preview"
-      preview_dirty=0
-      return
-    fi
-
-    if [ -d "$target" ]; then
-      echo "Directory" >> "$preview"
-      echo "" >> "$preview"
-
-      local dir_preview="$tmpdir/preview-dir"
-      > "$dir_preview"
-
-      for p in "$target"/*; do
-        [ -e "$p" ] || [ -L "$p" ] || continue
-        base=$(basename "$p")
-
-        if [ -d "$p" ]; then
-          printf "[D] %s/\n" "$base" >> "$dir_preview"
-        elif [ -f "$p" ]; then
-          printf "    %s\n" "$base" >> "$dir_preview"
-        fi
-      done
-
-      if [ "$show_hidden" -eq 1 ]; then
-        for p in "$target"/.[!.]* "$target"/..?*; do
-          [ -e "$p" ] || [ -L "$p" ] || continue
-          base=$(basename "$p")
-
-          if [ -d "$p" ]; then
-            printf "[D] %s/\n" "$base" >> "$dir_preview"
-          elif [ -f "$p" ]; then
-            printf "    %s\n" "$base" >> "$dir_preview"
-          fi
-        done
-      fi
-
-      sort -u "$dir_preview" | head -n "$max" >> "$preview"
-      rm -f "$dir_preview"
-
-      preview_dirty=0
-      return
-    fi
-
-    if [ ! -r "$target" ]; then
-      echo "Cannot read file." > "$preview"
-      preview_dirty=0
-      return
-    fi
-
-    if LC_ALL=C grep -Iq '' "$target" 2>/dev/null; then
-      awk -v max="$max" -v width="$width" '
-        BEGIN {
-          if (width < 30) width = 30
-        }
-
-        NR <= max {
-          gsub(/\t/, "  ")
-
-          line = $0
-          limit = width - 8
-
-          if (length(line) > limit) {
-            line = substr(line, 1, limit - 3) "..."
-          }
-
-          printf "%4d  %s\n", NR, line
-        }
-      ' "$target" > "$preview"
-    else
-      echo "Binary file preview skipped." > "$preview"
-    fi
-
-    preview_dirty=0
-  }
-
-  draw_vvim() {
-    local rows cols left_width right_col preview_width
-    local list_start list_height preview_height
-    local end i row item name text target line entry_index
-    local hidden_text preview_text
-
-    build_entries
-    refresh_git
-
-    rows=$(tput lines 2>/dev/null || echo 24)
-    cols=$(tput cols 2>/dev/null || echo 100)
-
-    left_width=$((cols / 2))
-    [ "$left_width" -lt 32 ] && left_width=32
-    [ "$left_width" -gt 55 ] && left_width=55
-
-    right_col=$((left_width + 3))
-    preview_width=$((cols - right_col - 1))
-    [ "$preview_width" -lt 30 ] && preview_width=30
-
-    list_start=5
-    list_height=$((rows - list_start - 1))
-    [ "$list_height" -lt 8 ] && list_height=8
-
-    preview_height=$((rows - list_start - 3))
-    [ "$preview_height" -lt 8 ] && preview_height=8
-
-    if [ "$selected" -lt "$offset" ]; then
-      offset="$selected"
-    fi
-
-    if [ "$selected" -ge $((offset + list_height)) ]; then
-      offset=$((selected - list_height + 1))
-    fi
-
-    end=$((offset + list_height - 1))
-    [ "$end" -gt "$total" ] && end="$total"
-
-    target=$(awk -v selected="$selected" 'NR == selected { print; exit }' "$entries")
-    make_preview "$target" "$preview_height" "$preview_width"
-
-    if [ "$show_hidden" -eq 1 ]; then
-      hidden_text="on"
-    else
-      hidden_text="off"
-    fi
-
-    if [ "$show_preview" -eq 1 ]; then
-      preview_text="on"
-    else
-      preview_text="off"
-    fi
-
-    tput civis 2>/dev/null
-    clear
-
-    tput cup 0 0
-    printf "\033[1;36mvvim\033[0m  \033[1;33mfake NvChad for plain Vim\033[0m"
-
-    tput cup 1 0
-    printf "\033[90mPath: %s\033[0m" "$cwd"
-
-    tput cup 2 0
-    printf "\033[90m%s | hidden: %s | preview: %s\033[0m" "$git_text" "$hidden_text" "$preview_text"
-
-    tput cup 3 0
-    printf "\033[90mj/k/arrows move | Enter open | h/Left parent | f find | g grep | p preview | r refresh | q quit\033[0m"
-
-    row=4
-    while [ "$row" -lt "$rows" ]; do
-      tput cup "$row" "$left_width"
-      printf "\033[90m|\033[0m"
-      row=$((row + 1))
-    done
-
-    tput cup 4 0
-    printf "\033[1;32mExplorer\033[0m"
-
-    tput cup 4 "$right_col"
-    printf "\033[1;32mPreview\033[0m"
-
-    i="$offset"
-    row="$list_start"
-    entry_index=0
-
-    while IFS= read -r item; do
-      entry_index=$((entry_index + 1))
-
-      [ "$entry_index" -lt "$offset" ] && continue
-      [ "$entry_index" -gt "$end" ] && break
-
-      name=$(display_name "$item")
-
-      if [ -d "$item" ]; then
-        text="[D] $name"
-      else
-        text="    $name"
-      fi
-
-      tput cup "$row" 0
-
-      if [ "$entry_index" -eq "$selected" ]; then
-        printf "\033[7m%-*.*s\033[0m" "$left_width" "$left_width" "$text"
-      else
-        printf "%-*.*s" "$left_width" "$left_width" "$text"
-      fi
-
-      row=$((row + 1))
-    done < "$entries"
-
-    row=$((list_start + 1))
-
-    while IFS= read -r line; do
-      [ "$row" -ge "$rows" ] && break
-
-      tput cup "$row" "$right_col"
-      printf "%-*.*s" "$preview_width" "$preview_width" "$line"
-
-      row=$((row + 1))
-    done < "$preview"
-
-    tput cup $((rows - 1)) 0
-  }
-
-  move_down() {
-    if [ "$selected" -lt "$total" ]; then
-      selected=$((selected + 1))
-      preview_dirty=1
-    fi
-  }
-
-  move_up() {
-    if [ "$selected" -gt 1 ]; then
-      selected=$((selected - 1))
-      preview_dirty=1
-    fi
-  }
-
-  open_selected() {
-    local item
-
-    item=$(awk -v selected="$selected" 'NR == selected { print; exit }' "$entries")
-
-    if [ -z "$item" ]; then
-      return
-    fi
-
-    if [ -d "$item" ]; then
-      cwd=$(cd "$item" 2>/dev/null && pwd -P)
-      selected=1
-      offset=1
-      mark_dirty
-      return
-    fi
-
-    if [ -f "$item" ]; then
-      local editor
-      editor=$(vvim_editor)
-      tput cnorm 2>/dev/null
-      clear
-      command $editor "$item"
-      preview_dirty=1
-      git_dirty=1
-    fi
-  }
-
-  go_parent() {
-    if [ "$cwd" != "/" ]; then
-      cwd=$(cd "$cwd/.." 2>/dev/null && pwd -P)
-      selected=1
-      offset=1
-      mark_dirty
-    fi
-  }
-
-  open_by_path() {
-    local file
-
-    tput cnorm 2>/dev/null
-    clear
-    read -p "Open file: " file
-
-    [ -z "$file" ] && return
-
-    case "$file" in
-      /*)
-        tput cnorm 2>/dev/null
-        command $(vvim_editor) "$file"
-        ;;
-      *)
-        tput cnorm 2>/dev/null
-        command $(vvim_editor) "$cwd/$file"
-        ;;
-    esac
-
-    preview_dirty=1
-    git_dirty=1
-  }
-
-  new_file() {
-    local file full
-
-    tput cnorm 2>/dev/null
-    clear
-    read -p "New file: " file
-
-    [ -z "$file" ] && return
-
-    case "$file" in
-      /*)
-        full="$file"
-        ;;
-      *)
-        full="$cwd/$file"
-        ;;
-    esac
-
-    mkdir -p "$(dirname "$full")"
-    tput cnorm 2>/dev/null
-    command $(vvim_editor) "$full"
-
-    mark_dirty
-  }
-
-  show_git_status() {
-    tput cnorm 2>/dev/null
-    clear
-
-    if ! git -C "$cwd" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-      echo "Not inside a Git repository."
-      echo
-      read -p "Press Enter..."
-      return
-    fi
-
-    printf "\033[1;36mGit status\033[0m\n\n"
-    git -C "$cwd" status --short
-
-    echo
-    read -p "Press Enter..."
-
-    git_dirty=1
-  }
-
-  while true; do
-    local key k1 k2 rest
-
-    draw_vvim
-
-    if ! read_vvim_key key; then
-      cleanup_vvim
-      clear
-      return
-    fi
-
-    case "$key" in
-      q|Q)
-        cleanup_vvim
-        clear
-        return
-        ;;
-
-      j)
-        move_down
-        ;;
-
-      k)
-        move_up
-        ;;
-
-      h|H)
-        go_parent
-        ;;
-
-      l|L|"")
-        open_selected
-        ;;
-
-      f|F)
-        tput cnorm 2>/dev/null
-        clear
-
-        if command -v vfind >/dev/null 2>&1; then
-          vfind "" "" "$cwd"
-          mark_dirty
-        else
-          echo "vfind is not installed yet."
-          read -p "Press Enter..."
-        fi
-        ;;
-
-      g|G)
-        tput cnorm 2>/dev/null
-        clear
-
-        if command -v gpick >/dev/null 2>&1; then
-          gpick "" "" "$cwd"
-          mark_dirty
-        else
-          echo "gpick is not installed yet."
-          read -p "Press Enter..."
-        fi
-        ;;
-
-      .)
-        if [ "$show_hidden" -eq 1 ]; then
-          show_hidden=0
-        else
-          show_hidden=1
-        fi
-
-        selected=1
-        offset=1
-        mark_dirty
-        ;;
-
-      p|P)
-        if [ "$show_preview" -eq 1 ]; then
-          show_preview=0
-        else
-          show_preview=1
-        fi
-
-        preview_dirty=1
-        ;;
-
-      r|R)
-        mark_dirty
-        ;;
-
-      o|O)
-        open_by_path
-        ;;
-
-      n|N)
-        new_file
-        ;;
-
-      s|S)
-        show_git_status
-        ;;
-
-      $'\033')
-        read_vvim_key_timeout k1 1
-        read_vvim_key_timeout k2 1
-
-        rest="${k1}${k2}"
-
-        case "$rest" in
-          "[A"|OA)
-            move_up
-            ;;
-          "[B"|OB)
-            move_down
-            ;;
-          "[C"|OC)
-            open_selected
-            ;;
-          "[D"|OD)
-            go_parent
-            ;;
-          "")
-            cleanup_vvim
-            clear
-            return
-            ;;
-        esac
-        ;;
-    esac
-  done
+  local target="${1:-.}"
+  local start_path target_abs target_base
+  target_base=$(basename "$target")
+  start_path=$(cd "$(dirname "$target")" 2>/dev/null && pwd -P)
+
+  if [ -z "$start_path" ]; then
+    printf "vvim: path not found: %s\n" "$target" >&2
+    return 1
+  fi
+
+  if [ -d "$target" ]; then
+    target_abs=$(cd "$target" 2>/dev/null && pwd -P)
+  else
+    target_abs="$start_path/$target_base"
+  fi
+
+  local tmpdir vimrc status target_vim
+  tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/vvim.XXXXXX") || return 1
+  vimrc="$tmpdir/vimrc"
+
+  target_vim=${target_abs//\\/\\\\}
+  target_vim=${target_vim//\"/\\\"}
+  printf "let g:vvim_cli_target = \"%s\"\n" "$target_vim" > "$vimrc"
+
+  cat >> "$vimrc" <<'EOF'
+set nocompatible
+set hidden
+set number
+set relativenumber
+set splitright
+set splitbelow
+set wildmenu
+set wildmode=longest:full,full
+set shortmess+=c
+set updatetime=300
+set timeout timeoutlen=500 ttimeoutlen=40
+set path+=**
+set grepformat=%f:%l:%m,%f:%l:%c:%m
+set grepprg=grep\ -nIH
+
+let mapleader = " "
+
+let g:netrw_banner = 0
+let g:netrw_liststyle = 3
+let g:netrw_altv = 1
+let g:netrw_browse_split = 4
+let g:netrw_winsize = 28
+let g:netrw_keepdir = 0
+
+let g:vvim_prune_dirs = [
+      \ '.git',
+      \ '.hg',
+      \ '.svn',
+      \ 'node_modules',
+      \ 'vendor',
+      \ 'dist',
+      \ 'build',
+      \ 'target',
+      \ 'coverage',
+      \ '.next',
+      \ '.nuxt',
+      \ '.cache',
+      \ '.parcel-cache',
+      \ '__pycache__',
+      \ 'tmp',
+      \ 'temp'
+      \ ]
+
+function! s:ShellCdPrefix() abort
+  return 'cd ' . shellescape(getcwd()) . ' && '
+endfunction
+
+function! s:FindPruneExpr() abort
+  let parts = []
+  for dir in g:vvim_prune_dirs
+    call add(parts, '-name ' . shellescape(dir))
+  endfor
+  return '\( -type d \( ' . join(parts, ' -o ') . ' \) -prune \) -o'
+endfunction
+
+function! s:InTree() abort
+  return &filetype ==# 'netrw' || expand('%:t') ==# 'NetrwTreeListing' || isdirectory(expand('%:p'))
+endfunction
+
+function! s:ProjectRoot(path) abort
+  if isdirectory(a:path)
+    let dir = fnamemodify(a:path, ':p')
+    let fallback = dir
+  else
+    let dir = fnamemodify(a:path, ':p:h')
+    let fallback = dir
+  endif
+
+  while !empty(dir)
+    if isdirectory(dir . '/.git')
+      return dir
+    endif
+
+    let parent = fnamemodify(dir, ':h')
+
+    if parent ==# dir
+      break
+    endif
+
+    let dir = parent
+  endwhile
+
+  return fallback
+endfunction
+
+function! s:OpenTree() abort
+  silent! Lexplore
+  if &filetype ==# 'netrw'
+    wincmd p
+  endif
+endfunction
+
+function! s:ShowDashboard() abort
+  let root = getcwd()
+
+  enew
+  file vvim-dashboard
+  setlocal buftype=nofile bufhidden=hide noswapfile nobuflisted
+  setlocal modifiable noreadonly
+  call setline(1, [
+        \ 'vvim',
+        \ '',
+        \ 'Project: ' . root,
+        \ '',
+        \ 'Space e    tree',
+        \ 'Space f f  find files',
+        \ 'Space f w  grep text',
+        \ 'Space f r  recent files',
+        \ 'Space b    buffers',
+        \ 'Space h    help',
+        \ 'Alt t      terminal',
+        \ '',
+        \ 'Quickfix: Enter open, [q previous, ]q next, Space q close',
+        \ 'Windows: Ctrl-w h/l move, Ctrl-w </> resize, Alt h/j/k/l resize',
+        \ ''
+        \ ])
+  setlocal nomodified
+  setlocal nomodifiable
+  normal! gg
+endfunction
+
+function! s:QuickfixOpen() abort
+  if empty(getqflist())
+    cclose
+    echo 'No results.'
+    return
+  endif
+
+  botright copen 12
+  wincmd p
+endfunction
+
+function! s:FindFiles() abort
+  if s:InTree()
+    echo 'File finder is disabled while focused in the folder tree.'
+    return
+  endif
+
+  let query = input('Find file: ')
+  redraw
+
+  let cmd = s:ShellCdPrefix()
+        \ . 'find . '
+        \ . s:FindPruneExpr()
+        \ . ' -type f -print'
+
+  let files = systemlist(cmd)
+
+  if v:shell_error > 1
+    echo 'find failed.'
+    return
+  endif
+
+  if !empty(query)
+    let needle = tolower(query)
+    call filter(files, 'stridx(tolower(v:val), needle) >= 0')
+  endif
+
+  call filter(files, 'v:val !=# ""')
+
+  if empty(files)
+    call setqflist([], 'r')
+    cclose
+    echo 'No matching files.'
+    return
+  endif
+
+  call setqflist(map(files, "{'filename': v:val, 'lnum': 1, 'text': v:val}"), 'r')
+  call s:QuickfixOpen()
+endfunction
+
+function! s:RecentFiles() abort
+  if s:InTree()
+    echo 'Recent files are disabled while focused in the folder tree.'
+    return
+  endif
+
+  let root = fnamemodify(getcwd(), ':p')
+  let items = []
+
+  for file in v:oldfiles
+    let full = fnamemodify(file, ':p')
+
+    if filereadable(full) && stridx(full, root) == 0
+      call add(items, {
+            \ 'filename': full,
+            \ 'lnum': 1,
+            \ 'text': fnamemodify(full, ':.')
+            \ })
+    endif
+  endfor
+
+  if empty(items)
+    call setqflist([], 'r')
+    cclose
+    echo 'No recent files for this project.'
+    return
+  endif
+
+  call setqflist(items, 'r')
+  call s:QuickfixOpen()
+endfunction
+
+function! s:Buffers() abort
+  if s:InTree()
+    echo 'Buffer picker is disabled while focused in the folder tree.'
+    return
+  endif
+
+  let items = []
+
+  for buf in getbufinfo({'buflisted': 1})
+    if empty(buf.name)
+      continue
+    endif
+
+    call add(items, {
+          \ 'filename': buf.name,
+          \ 'lnum': buf.lnum > 0 ? buf.lnum : 1,
+          \ 'text': fnamemodify(buf.name, ':.')
+          \ })
+  endfor
+
+  if empty(items)
+    call setqflist([], 'r')
+    cclose
+    echo 'No listed buffers.'
+    return
+  endif
+
+  call setqflist(items, 'r')
+  call s:QuickfixOpen()
+endfunction
+
+function! s:GrepWord() abort
+  if s:InTree()
+    echo 'Grep is disabled while focused in the folder tree.'
+    return
+  endif
+
+  let default = expand('<cword>')
+  let pattern = input('Grep: ', default)
+  redraw
+
+  if empty(pattern)
+    echo 'No grep pattern.'
+    return
+  endif
+
+  let cmd = s:ShellCdPrefix()
+        \ . 'LC_ALL=C find . '
+        \ . s:FindPruneExpr()
+        \ . ' -type f -exec grep -nIH -e '
+        \ . shellescape(pattern)
+        \ . ' {} +'
+
+  let results = systemlist(cmd)
+
+  if v:shell_error > 1
+    echo 'grep failed.'
+    return
+  endif
+
+  call setqflist([], 'r')
+  if empty(results)
+    cclose
+    echo 'No grep matches.'
+    return
+  endif
+
+  cexpr results
+  call s:QuickfixOpen()
+endfunction
+
+function! s:ToggleTerm() abort
+  if exists('s:term_popup') && s:term_popup > 0
+    if exists('*popup_close')
+      call popup_close(s:term_popup)
+    endif
+    let s:term_popup = 0
+    return
+  endif
+
+  if exists('*term_start') && exists('*popup_create') && exists('*win_execute')
+    let shell = empty(&shell) ? '/bin/sh' : &shell
+    let termbuf = term_start(shell, {'hidden': v:true, 'term_name': 'vvim-terminal'})
+    let width = float2nr(&columns * 0.86)
+    let height = float2nr(&lines * 0.72)
+
+    if width < 50
+      let width = &columns - 4
+    endif
+
+    if height < 12
+      let height = &lines - 4
+    endif
+
+    let s:term_popup = popup_create(termbuf, {
+          \ 'title': ' vvim terminal ',
+          \ 'pos': 'center',
+          \ 'minwidth': width,
+          \ 'minheight': height,
+          \ 'border': [],
+          \ 'padding': [0, 0, 0, 0]
+          \ })
+    call win_execute(s:term_popup, 'startinsert')
+    return
+  endif
+
+  botright 12split
+  if exists(':terminal') == 2
+    terminal
+    startinsert
+  else
+    echo 'This Vim does not support :terminal.'
+  endif
+endfunction
+
+function! s:StartVvim() abort
+  let target = get(g:, 'vvim_cli_target', getcwd())
+  let root = s:ProjectRoot(target)
+  execute 'cd' fnameescape(root)
+
+  if isdirectory(target)
+    call s:ShowDashboard()
+    call s:OpenTree()
+    return
+  endif
+
+  execute 'edit' fnameescape(target)
+  call s:OpenTree()
+endfunction
+
+nnoremap <silent> <Leader>e :call <SID>OpenTree()<CR>
+nnoremap <silent> <Leader>h :call <SID>ShowDashboard()<CR>
+nnoremap <silent> <Leader>b :call <SID>Buffers()<CR>
+nnoremap <silent> <Leader>ff :call <SID>FindFiles()<CR>
+nnoremap <silent> <Leader>fr :call <SID>RecentFiles()<CR>
+nnoremap <silent> <Leader>fw :call <SID>GrepWord()<CR>
+nnoremap <silent> <Leader>q :cclose<CR>
+nnoremap <silent> ]q :cnext<CR>
+nnoremap <silent> [q :cprevious<CR>
+nnoremap <silent> <M-t> :call <SID>ToggleTerm()<CR>
+nnoremap <silent> <Esc>t :call <SID>ToggleTerm()<CR>
+nnoremap <silent> <M-h> :vertical resize -4<CR>
+nnoremap <silent> <M-l> :vertical resize +4<CR>
+nnoremap <silent> <M-j> :resize -2<CR>
+nnoremap <silent> <M-k> :resize +2<CR>
+tnoremap <silent> <M-t> <C-W>:call <SID>ToggleTerm()<CR>
+tnoremap <silent> <Esc>t <C-W>:call <SID>ToggleTerm()<CR>
+
+augroup vvim
+  autocmd!
+  autocmd VimEnter * call <SID>StartVvim()
+  autocmd FileType qf nnoremap <buffer> <CR> <CR>
+augroup END
+EOF
+
+  command vim -Nu "$vimrc" --noplugin
+  status=$?
+
+  rm -rf "$tmpdir"
+  return "$status"
 }
